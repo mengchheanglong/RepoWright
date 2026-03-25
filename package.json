@@ -1,0 +1,27 @@
+{
+  "name": "sourcelens",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CLI-first source code analyzer and engineering knowledge workbench",
+  "scripts": {
+    "dev": "pnpm --filter operator-backend dev",
+    "api:dev": "pnpm --filter operator-backend api:dev",
+    "ui:dev": "pnpm --filter operator-frontend dev",
+    "dev:all": "concurrently \"pnpm api:dev\" \"pnpm ui:dev\"",
+    "build": "pnpm -r build",
+    "test": "pnpm --filter operator-backend test",
+    "lint": "pnpm --filter operator-backend lint",
+    "lint:fix": "pnpm --filter operator-backend lint:fix",
+    "format": "pnpm --filter operator-backend format"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@biomejs/biome",
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
+}

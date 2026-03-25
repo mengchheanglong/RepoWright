@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build artifacts
+dist/
+**/dist/
+build/
+**/build/
+.next/
+coverage/
+**/coverage/
+*.tsbuildinfo
+
+# Runtime and local operator data
+runs/*/
+!runs/.gitkeep
+operator-data/
+operator-data/clones/
+operator-data/runs/
+
+# Databases and local state
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Logs and temp files
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+tmp/
+temp/
+
+# Tool caches
+.turbo/
+.cache/
+.vite/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
