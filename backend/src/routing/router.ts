@@ -3,12 +3,26 @@ import { InternalPlannerBackend } from '../backends/internal-planner.js';
 import type { BackendType } from '../domain/index.js';
 import { getLogger } from '../utils/logger.js';
 
-const backend = new InternalPlannerBackend();
+const backendRegistry: Record<BackendType, BackendAdapter> = {
+  'internal-planner': new InternalPlannerBackend(),
+};
 
-export function selectBackend(_preferred?: BackendType): BackendAdapter {
+export function selectBackend(preferred?: BackendType): BackendAdapter {
   const logger = getLogger();
-  logger.info(`Selected engine: ${backend.name}`);
-  return backend;
+  const requested = preferred ? backendRegistry[preferred] : undefined;
+
+  if (requested?.isAvailable()) {
+    logger.info(`Selected engine: ${requested.name}`);
+    return requested;
+  }
+
+  const available = Object.values(backendRegistry).find((backend) => backend.isAvailable());
+  if (!available) {
+    throw new Error('No execution backend is currently available.');
+  }
+
+  logger.info(`Selected engine: ${available.name}`);
+  return available;
 }
 
 export function backendDisplayName(type: BackendType): string {
@@ -16,4 +30,16 @@ export function backendDisplayName(type: BackendType): string {
     case 'internal-planner':
       return 'Local Planner';
   }
+}
+
+export function listBackendCapabilities(): Array<{
+  type: BackendType;
+  name: string;
+  available: boolean;
+}> {
+  return Object.entries(backendRegistry).map(([type, backend]) => ({
+    type: type as BackendType,
+    name: backend.name,
+    available: backend.isAvailable(),
+  }));
 }

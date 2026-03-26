@@ -33,6 +33,8 @@ export default function App() {
   const [compareTargetId, setCompareTargetId] = useState('');
   const [runDocument, setRunDocument] = useState(null);
   const [pendingDeleteSource, setPendingDeleteSource] = useState(null);
+  const [capabilities, setCapabilities] = useState(null);
+  const [nextTaskHint, setNextTaskHint] = useState(null);
   const [status, setStatus] = useState('Ready');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -56,6 +58,11 @@ export default function App() {
       setComparison(null);
       setRunDocument(null);
     }
+
+    if (!capabilities) {
+      const meta = await request('/capabilities').catch(() => null);
+      if (meta) setCapabilities(meta);
+    }
   }
 
   useEffect(() => {
@@ -71,6 +78,16 @@ export default function App() {
     const fallback = sources.find((s) => s.id !== activeSourceId)?.id ?? '';
     if (fallback !== compareTargetId) setCompareTargetId(fallback);
   }, [activeSourceId, compareTargetId, sources]);
+
+  useEffect(() => {
+    if (!activeSourceId) {
+      setNextTaskHint(null);
+      return;
+    }
+    request(`/next-task/${activeSourceId}`)
+      .then((payload) => setNextTaskHint(payload))
+      .catch(() => setNextTaskHint(null));
+  }, [activeSourceId, runs.length, tasks.length]);
 
   // ── Action handlers ──────────────────────────────────────────
 
@@ -131,13 +148,14 @@ export default function App() {
     setError('');
     setStatus(`Executing "${task.title}"...`);
     try {
+      const idempotencyKey = `task:${task.id}:source:${task.sourceId}`;
       const payload = await request('/run', {
         method: 'POST',
-        body: JSON.stringify({ taskId: task.id }),
+        body: JSON.stringify({ taskId: task.id, idempotencyKey }),
       });
       const nextRun = payload.run ?? null;
       if (!nextRun) throw new Error('Run response was incomplete.');
-      setStatus(`Run ${nextRun.id} completed.`);
+      setStatus(payload.reused ? `Run ${nextRun.id} reused (idempotent replay).` : `Run ${nextRun.id} completed.`);
       await refresh();
       await openRunDocument(nextRun.id);
     } catch (err) {
@@ -229,6 +247,11 @@ export default function App() {
   const sourceRuns = runs
     .filter((r) => r.sourceId === activeSourceId)
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const recommendedTask = nextTaskHint?.nextTask ?? null;
+
+  function applyPreset(preset) {
+    setSourceInput(preset);
+  }
 
   // ── Layout ───────────────────────────────────────────────────
 
@@ -241,6 +264,14 @@ export default function App() {
           Ingest a codebase, inspect its architecture, run generated tasks,
           compare sources, and export reports.
         </p>
+        <div className="hero-presets">
+          <span className="core-label">Quick input presets</span>
+          <div className="hero-preset-actions">
+            <button type="button" className="ghost" onClick={() => applyPreset('.')}>Current folder</button>
+            <button type="button" className="ghost" onClick={() => applyPreset('../')}>Parent folder</button>
+            <button type="button" className="ghost" onClick={() => applyPreset('https://github.com/owner/repo.git')}>Git URL</button>
+          </div>
+        </div>
         <form onSubmit={onIngest} className="ingest-form">
           <input
             type="text"
@@ -266,6 +297,11 @@ export default function App() {
         )}
         <p className="status">{status}</p>
         {error && <p className="error">{error}</p>}
+        {capabilities && (
+          <p className="meta">
+            API {capabilities.apiVersion} | Run schema {capabilities.runRequestSchemaVersion} | Idempotency {capabilities.runIdempotency?.supported ? 'enabled' : 'disabled'}
+          </p>
+        )}
       </section>
 
       <div className="main-layout">
@@ -303,6 +339,15 @@ export default function App() {
         </aside>
 
         <div className="report-area">
+          {recommendedTask && (
+            <section className="report-section card">
+              <h3>Recommended Next Task</h3>
+              <p>{nextTaskHint?.summary}</p>
+              <button type="button" className="secondary-action" onClick={() => runTask(recommendedTask)} disabled={busy}>
+                Run Recommended Task
+              </button>
+            </section>
+          )}
           {analysis && !deep && <BasicAnalysisSection analysis={analysis} />}
           {analysis && deep && (
             <>

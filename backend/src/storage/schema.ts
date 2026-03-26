@@ -53,6 +53,7 @@ export const runs = sqliteTable('runs', {
   sourceId: text('source_id')
     .notNull()
     .references(() => sources.id),
+  idempotencyKey: text('idempotency_key'),
   status: text('status').notNull(),
   backend: text('backend').notNull(),
   workspacePath: text('workspace_path').notNull(),

@@ -5,6 +5,7 @@ import type { OperatorConfig } from '../core/config.js';
 import { ExecutionError } from '../core/errors.js';
 import type {
   AnalysisReport,
+  BackendType,
   CandidateTask,
   ExecutionRun,
   RunArtifact,
@@ -34,7 +35,8 @@ export interface ExecuteOptions {
   analysis: AnalysisReport;
   config: OperatorConfig;
   repo: Repository;
-  backend?: 'internal-planner';
+  backend?: BackendType;
+  idempotencyKey?: string;
 }
 
 export async function executeTask(opts: ExecuteOptions): Promise<ExecutionRun> {
@@ -53,6 +55,7 @@ export async function executeTask(opts: ExecuteOptions): Promise<ExecutionRun> {
     id: runId,
     taskId: task.id,
     sourceId: source.id,
+    idempotencyKey: opts.idempotencyKey,
     status: 'created',
     backend: selectedBackend.type,
     workspacePath,
