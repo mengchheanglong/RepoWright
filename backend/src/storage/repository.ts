@@ -188,6 +188,7 @@ export class Repository {
         id: run.id,
         taskId: run.taskId,
         sourceId: run.sourceId,
+        idempotencyKey: run.idempotencyKey ?? null,
         status: run.status,
         backend: run.backend,
         workspacePath: run.workspacePath,
@@ -211,6 +212,16 @@ export class Repository {
 
   getRun(id: string): ExecutionRun | null {
     const row = this.db.select().from(schema.runs).where(eq(schema.runs.id, id)).get();
+    return row ? mapRun(row) : null;
+  }
+
+  getRunByTaskAndIdempotency(taskId: string, idempotencyKey: string): ExecutionRun | null {
+    const row = this.db
+      .select()
+      .from(schema.runs)
+      .where(eq(schema.runs.taskId, taskId))
+      .all()
+      .find((candidate) => candidate.idempotencyKey === idempotencyKey);
     return row ? mapRun(row) : null;
   }
 
@@ -331,6 +342,7 @@ function mapRun(r: RunRow): ExecutionRun {
     id: r.id,
     taskId: r.taskId,
     sourceId: r.sourceId,
+    idempotencyKey: r.idempotencyKey ?? undefined,
     status: r.status as ExecutionRun['status'],
     backend: r.backend as ExecutionRun['backend'],
     workspacePath: r.workspacePath,
@@ -367,4 +379,3 @@ function mapReview(r: ReviewRow): ReviewReport {
     createdAt: r.createdAt,
   };
 }
-

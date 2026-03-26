@@ -41,6 +41,12 @@ Open the web UI, enter a local path, git URL, or text brief, and hit **Analyze**
 
 The frontend provides source ingestion, deep-analysis browsing, task execution, source comparison, exports, and run history. The API server can also be used directly via `curl` or any HTTP client.
 
+## AI/Automation-Friendly API
+
+- `GET /api/capabilities`: discover API version, run schema version, idempotency support, and backend availability
+- `GET /api/next-task/:sourceId`: fetch the next recommended un-run task for autonomous workflows
+- `POST /api/run` supports `idempotencyKey` to safely retry without duplicating runs
+
 ## Environment
 
 - `REPOWRIGHT_API_PORT`: backend API port, default `8787`

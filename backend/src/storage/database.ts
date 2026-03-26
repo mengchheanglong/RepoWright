@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id),
   source_id TEXT NOT NULL REFERENCES sources(id),
+  idempotency_key TEXT,
   status TEXT NOT NULL,
   backend TEXT NOT NULL,
   workspace_path TEXT NOT NULL,
@@ -105,6 +106,7 @@ function migrateSchema(database: Database.Database): void {
   ensureColumn(database, 'analyses', 'deep_analysis', 'TEXT');
   ensureColumn(database, 'reviews', 'done_score', 'REAL');
   ensureColumn(database, 'reviews', 'findings', 'TEXT');
+  ensureColumn(database, 'runs', 'idempotency_key', 'TEXT');
 }
 
 function ensureColumn(
