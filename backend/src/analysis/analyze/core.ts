@@ -142,7 +142,16 @@ const PATTERN_INDICATORS: Record<string, (files: string[], contents: Map<string,
     files.filter((f) => f.includes('view')).length >= 2,
   'Repository Pattern': (_files, contents) => hasThreshold(contents, (c) => /class\s+\w*Repository/i.test(c)),
   'Service Layer': (files) => files.filter((f) => /[\\/]services?[\\/]/i.test(f)).length >= Math.min(files.length * 0.05, 3),
-  'Middleware Chain': (_files, contents) => hasThreshold(contents, (c) => /app\.use\(/i.test(c)),
+  'Middleware Chain': (_files, contents) =>
+    hasThreshold(
+      contents,
+      (c) =>
+        /(?:app|router|server)\.use\s*\(|express\.Router\(\)\.use\s*\(|fastify\.addHook\s*\(\s*['"](?:onRequest|preHandler|preValidation|onSend)['"]|koa\(\)\.use\s*\(/i.test(
+          c,
+        ),
+      1,
+      0.01,
+    ),
   'Event-Driven': (_files, contents) => hasThreshold(contents, (c) => /\.on\(|\.emit\(|EventEmitter|addEventListener/i.test(c)),
   'CLI Architecture': (files, contents) => detectCliArchitecture(files, contents),
   'REST API': (_files, contents) => hasThreshold(contents, (c) => /app\.(get|post|put|delete|patch)\s*\(/i.test(c) || /@app\.(get|post|put|delete|patch)\s*\(/i.test(c) || /APIRouter|FastAPI\(\)/i.test(c)),

@@ -225,6 +225,13 @@ function isBuildScript(fp: string): boolean {
     lower.endsWith('configure.py') || lower.includes('build_support/');
 }
 
+function isLikelyPatternDefinitionContext(content: string, matchIndex: number): boolean {
+  const start = Math.max(0, matchIndex - 100);
+  const end = Math.min(content.length, matchIndex + 40);
+  const window = content.slice(start, end);
+  return /(?:regex|pattern)\s*:\s*\/|new\s+RegExp\s*\(/i.test(window);
+}
+
 /**
  * Check if a match index falls inside a Python docstring (triple-quoted block)
  * or a comment line. This avoids false positives on documented examples.
@@ -324,6 +331,8 @@ function scanVulnerabilities(files: Map<string, string>): SecurityFinding[] {
       while ((match = global.exec(content)) !== null) {
         // Skip matches inside docstrings or comments
         if (isInsideDocstringOrComment(content, match.index, fp)) continue;
+        // Skip matches that appear in detector pattern definitions
+        if (isLikelyPatternDefinitionContext(content, match.index)) continue;
 
         findings.push({
           type: 'vulnerability',
@@ -427,6 +436,41 @@ function scanMisconfigurations(files: Map<string, string>, fileList: string[]): 
   return findings;
 }
 
+function normalizeFindingTitle(title: string): string {
+  if (title === 'Command Injection (exec/spawn)' || title === 'Dynamic exec()') return 'Command Injection';
+  return title;
+}
+
+function applyContextSuppressions(findings: SecurityFinding[], fileList: string[]): SecurityFinding[] {
+  const actionableFileCount = fileList.filter((fp) => isActionableCodePath(fp)).length;
+  const hasExplicitProdSignal = fileList.some((fp) =>
+    /dockerfile|docker-compose|compose\.ya?ml|k8s|helm|terraform|\.github[\\/]workflows/i.test(fp.toLowerCase()),
+  );
+
+  return findings.filter((finding) => {
+    if (finding.title === 'Missing Security Headers' && actionableFileCount <= 12 && !hasExplicitProdSignal) return false;
+    return true;
+  });
+}
+
+function normalizeAndDedupeFindings(findings: SecurityFinding[]): SecurityFinding[] {
+  const merged = new Map<string, SecurityFinding>();
+  for (const finding of findings) {
+    const normalized: SecurityFinding = { ...finding, title: normalizeFindingTitle(finding.title) };
+    const key = `${normalized.type}|${normalized.title}|${normalized.filePath}|${normalized.line}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, normalized);
+      continue;
+    }
+    const severityRank: Record<SecurityFinding['severity'], number> = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+    if (severityRank[normalized.severity] > severityRank[existing.severity]) {
+      merged.set(key, normalized);
+    }
+  }
+  return Array.from(merged.values());
+}
+
 // ---------------------------------------------------------------------------
 // Score computation
 // ---------------------------------------------------------------------------
@@ -473,7 +517,8 @@ export function scanSecurity(files: Map<string, string>, fileList: string[], all
   const secretFindings = scanSecrets(files);
   const vulnFindings = scanVulnerabilities(files);
   const miscFindings = scanMisconfigurations(files, fileList);
-  const findings = [...secretFindings, ...vulnFindings, ...miscFindings];
+  const rawFindings = [...secretFindings, ...vulnFindings, ...miscFindings];
+  const findings = normalizeAndDedupeFindings(applyContextSuppressions(rawFindings, fileList));
 
   // Use allFileList for project-level checks (SECURITY.md, lock files) since these
   // can exist in any scope (docs, root, .github/) — not just production code
