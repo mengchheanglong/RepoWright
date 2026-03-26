@@ -15,6 +15,7 @@
     "lint": "biome check src/ tests/",
     "lint:fix": "biome check --write src/ tests/",
     "format": "biome format --write src/ tests/",
+    "eval:crosscheck": "tsx scripts/crosscheck-single-repo.ts",
     "clean": "rimraf dist"
   },
   "engines": {
