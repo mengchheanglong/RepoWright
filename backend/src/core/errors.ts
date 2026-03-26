@@ -9,23 +9,6 @@ export class OperatorError extends Error {
   }
 }
 
-export class SourceNotFoundError extends OperatorError {
-  constructor(id: string) {
-    super(`Source not found: ${id}`, 'SOURCE_NOT_FOUND');
-  }
-}
-
-export class TaskNotFoundError extends OperatorError {
-  constructor(id: string) {
-    super(`Task not found: ${id}`, 'TASK_NOT_FOUND');
-  }
-}
-
-export class RunNotFoundError extends OperatorError {
-  constructor(id: string) {
-    super(`Run not found: ${id}`, 'RUN_NOT_FOUND');
-  }
-}
 
 export class InvalidSourceError extends OperatorError {
   constructor(message: string) {

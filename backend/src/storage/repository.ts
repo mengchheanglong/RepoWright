@@ -1,11 +1,10 @@
-import { desc, eq, like, or } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type {
   AnalysisReport,
   CandidateTask,
   DeepAnalysis,
   ExecutionRun,
-  MemoryEntry,
   ReviewReport,
   RunArtifact,
   RunStatus,
@@ -74,8 +73,6 @@ export class Repository {
     this.db.delete(schema.runs).where(eq(schema.runs.sourceId, sourceId)).run();
     this.db.delete(schema.tasks).where(eq(schema.tasks.sourceId, sourceId)).run();
     this.db.delete(schema.analyses).where(eq(schema.analyses.sourceId, sourceId)).run();
-    this.db.delete(schema.memory).where(eq(schema.memory.sourceId, sourceId)).run();
-
     const deleted = this.db.delete(schema.sources).where(eq(schema.sources.id, sourceId)).run();
 
     return {
@@ -274,50 +271,6 @@ export class Repository {
     return row ? mapReview(row) : null;
   }
 
-  // --- Memory ---
-
-  saveMemory(entry: MemoryEntry): void {
-    this.db
-      .insert(schema.memory)
-      .values({
-        id: entry.id,
-        category: entry.category,
-        title: entry.title,
-        content: entry.content,
-        tags: JSON.stringify(entry.tags),
-        sourceId: entry.sourceId ?? null,
-        createdAt: entry.createdAt,
-      })
-      .run();
-  }
-
-  listMemory(category?: string): MemoryEntry[] {
-    const query = this.db.select().from(schema.memory);
-    const rows = category
-      ? query
-          .where(eq(schema.memory.category, category))
-          .orderBy(desc(schema.memory.createdAt))
-          .all()
-      : query.orderBy(desc(schema.memory.createdAt)).all();
-    return rows.map(mapMemory);
-  }
-
-  searchMemory(keyword: string): MemoryEntry[] {
-    const pattern = `%${keyword}%`;
-    const rows = this.db
-      .select()
-      .from(schema.memory)
-      .where(
-        or(
-          like(schema.memory.title, pattern),
-          like(schema.memory.content, pattern),
-          like(schema.memory.tags, pattern),
-        ),
-      )
-      .orderBy(desc(schema.memory.createdAt))
-      .all();
-    return rows.map(mapMemory);
-  }
 }
 
 // --- Mappers ---
@@ -328,8 +281,6 @@ type TaskRow = typeof schema.tasks.$inferSelect;
 type RunRow = typeof schema.runs.$inferSelect;
 type ArtifactRow = typeof schema.artifacts.$inferSelect;
 type ReviewRow = typeof schema.reviews.$inferSelect;
-type MemoryRow = typeof schema.memory.$inferSelect;
-
 function mapSource(r: SourceRow): Source {
   return {
     id: r.id,
@@ -417,14 +368,3 @@ function mapReview(r: ReviewRow): ReviewReport {
   };
 }
 
-function mapMemory(r: MemoryRow): MemoryEntry {
-  return {
-    id: r.id,
-    category: r.category,
-    title: r.title,
-    content: r.content,
-    tags: JSON.parse(r.tags),
-    sourceId: r.sourceId ?? undefined,
-    createdAt: r.createdAt,
-  };
-}

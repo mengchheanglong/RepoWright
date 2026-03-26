@@ -1,23 +1,25 @@
 import express, { type Request, type Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { analyzeSource, compareAnalyses } from '../analysis/index.js';
+import { exportToCsv, exportToJson, exportToMarkdown } from '../analysis/export.js';
 import { loadConfig } from '../core/config.js';
 import { executeTask } from '../execution/index.js';
 import { ingestSource } from '../intake/index.js';
-import { autoSaveAnalysisFindings, autoSaveExecutionOutcome, listMemoryEntries, searchMemoryEntries } from '../memory/index.js';
 import { generateTasks } from '../planning/index.js';
 import { generateReview } from '../review/index.js';
-import { listBackends } from '../routing/router.js';
 import { closeDatabase, getDatabase } from '../storage/database.js';
 import { Repository } from '../storage/repository.js';
 import { initLogger } from '../utils/logger.js';
 
-type BackendOption = 'internal-planner' | 'codex-cli' | 'claude-cli';
+export interface ApiServerOptions {
+  port?: number;
+}
 
 const app = express();
-const port = Number(
-  process.env.REPOWRIGHT_API_PORT ?? process.env.SOURCELENS_API_PORT ?? process.env.OPERATOR_API_PORT ?? 8787,
+const defaultPort = Number(
+  process.env.REPOWRIGHT_API_PORT ?? process.env.OPERATOR_API_PORT ?? 8787,
 );
 
 const config = loadConfig();
@@ -48,10 +50,6 @@ app.get('/api/health', (_req: Request, res: Response) => {
     dataDir: config.dataDir,
     runsDir: config.runsDir,
   });
-});
-
-app.get('/api/backends', (_req: Request, res: Response) => {
-  res.json({ backends: listBackends() });
 });
 
 app.get('/api/sources', (_req: Request, res: Response) => {
@@ -120,25 +118,6 @@ app.get('/api/review/:runId', (req: Request, res: Response) => {
   return res.json({ review });
 });
 
-app.get('/api/reviews', (_req: Request, res: Response) => {
-  const runs = repo.listRuns();
-  const items = runs
-    .map((run) => {
-      const review = repo.getReview(run.id);
-      if (!review) return null;
-
-      const artifacts = repo.getArtifactsByRun(run.id);
-      return {
-        run,
-        review,
-        artifactCount: artifacts.length,
-      };
-    })
-    .filter((item) => item !== null);
-
-  return res.json({ items });
-});
-
 app.get('/api/review-document/:runId', (req: Request, res: Response) => {
   const runId = pickParam(req.params.runId);
   const run = runId ? repo.getRun(runId) : null;
@@ -186,6 +165,71 @@ app.get('/api/analysis/:sourceId', (req: Request, res: Response) => {
     return res.status(404).json({ error: `Analysis not found for source: ${sourceId ?? 'unknown'}` });
   }
   return res.json({ analysis });
+});
+
+app.get('/api/export/:sourceId', (req: Request, res: Response) => {
+  try {
+    const sourceId = pickParam(req.params.sourceId);
+    const format = typeof req.query.format === 'string' ? req.query.format : 'markdown';
+    if (!sourceId) {
+      return res.status(400).json({ error: 'Source ID is required.' });
+    }
+
+    const analysis = repo.getAnalysisBySource(sourceId);
+    if (!analysis) {
+      return res.status(404).json({ error: `Analysis not found for source: ${sourceId}` });
+    }
+
+    if (format === 'json') {
+      return res.json({
+        format,
+        files: [
+          {
+            name: `analysis-${sourceId}.json`,
+            mimeType: 'application/json',
+            content: exportToJson(analysis, analysis.deepAnalysis),
+          },
+        ],
+      });
+    }
+
+    if (format === 'csv') {
+      const csv = exportToCsv(analysis, analysis.deepAnalysis);
+      return res.json({
+        format,
+        files: [
+          {
+            name: `analysis-${sourceId}-metrics.csv`,
+            mimeType: 'text/csv',
+            content: csv.metrics,
+          },
+          {
+            name: `analysis-${sourceId}-findings.csv`,
+            mimeType: 'text/csv',
+            content: csv.findings,
+          },
+          {
+            name: `analysis-${sourceId}-improvements.csv`,
+            mimeType: 'text/csv',
+            content: csv.improvements,
+          },
+        ],
+      });
+    }
+
+    return res.json({
+      format: 'markdown',
+      files: [
+        {
+          name: `analysis-${sourceId}.md`,
+          mimeType: 'text/markdown',
+          content: exportToMarkdown(analysis, analysis.deepAnalysis),
+        },
+      ],
+    });
+  } catch (error) {
+    return handleError(error, res);
+  }
 });
 
 app.get('/api/compare/:idA/:idB', (req: Request, res: Response) => {
@@ -237,7 +281,6 @@ app.post('/api/ingest', (req: Request, res: Response) => {
 
     const tasks = generateTasks(analysis);
     repo.saveTasks(tasks);
-    autoSaveAnalysisFindings(analysis, repo);
 
     return res.status(201).json({ source, analysis, tasks });
   } catch (error) {
@@ -248,7 +291,6 @@ app.post('/api/ingest', (req: Request, res: Response) => {
 app.post('/api/run', async (req: Request, res: Response) => {
   try {
     const taskId = typeof req.body?.taskId === 'string' ? req.body.taskId.trim() : '';
-    const backend = req.body?.backend as BackendOption | undefined;
     if (!taskId) {
       return res.status(400).json({ error: 'Request field "taskId" is required.' });
     }
@@ -268,11 +310,8 @@ app.post('/api/run', async (req: Request, res: Response) => {
       return res.status(400).json({ error: `No analysis found for source: ${task.sourceId}` });
     }
 
-    const run = await executeTask({ task, source, analysis, config, repo, backend });
+    const run = await executeTask({ task, source, analysis, config, repo });
     const review = generateReview({ run, task, analysis, repo });
-
-    // Auto-save execution outcome to memory
-    autoSaveExecutionOutcome(run, task, review, repo);
 
     return res.status(201).json({ run, review });
   } catch (error) {
@@ -280,21 +319,25 @@ app.post('/api/run', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/memory', (req: Request, res: Response) => {
-  try {
-    const category = typeof req.query.category === 'string' ? req.query.category : undefined;
-    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
-    const entries = search ? searchMemoryEntries(repo, search) : listMemoryEntries(repo, category);
-    return res.json({ entries });
-  } catch (error) {
-    return handleError(error, res);
-  }
-});
+export function startApiServer(options: ApiServerOptions = {}) {
+  const port = options.port ?? defaultPort;
+  const server = app.listen(port, () => {
+    // Keep this plain for easy discovery in terminal output.
+    console.log(`RepoWright API running at http://localhost:${port}`);
+  });
 
-const server = app.listen(port, () => {
-  // Keep this plain for easy discovery in terminal output.
-  console.log(`RepoWright API running at http://localhost:${port}`);
-});
+  const shutdown = (): void => {
+    server.close(() => {
+      closeDatabase();
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  return server;
+}
 
 function handleError(error: unknown, res: Response): Response {
   if (error instanceof Error) {
@@ -351,12 +394,10 @@ function removeDirIfInside(targetPath: string, parentPath: string): void {
   }
 }
 
-function shutdown(): void {
-  server.close(() => {
-    closeDatabase();
-    process.exit(0);
-  });
-}
+const isDirectExecution =
+  typeof process.argv[1] === 'string' &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+if (isDirectExecution) {
+  startApiServer();
+}

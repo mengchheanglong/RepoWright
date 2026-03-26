@@ -77,15 +77,6 @@ CREATE TABLE IF NOT EXISTS reviews (
   findings TEXT,
   created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS memory (
-  id TEXT PRIMARY KEY,
-  category TEXT NOT NULL,
-  title TEXT NOT NULL,
-  content TEXT NOT NULL,
-  tags TEXT NOT NULL,
-  source_id TEXT,
-  created_at TEXT NOT NULL
-);
 `;
 
 export function getDatabase(dbPath: string): BetterSQLite3Database<typeof schema> {

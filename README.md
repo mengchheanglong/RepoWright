@@ -7,8 +7,7 @@ RepoWright is a local-first source code analysis workbench. It ingests a repo, d
 - Deep static analysis for languages, frameworks, dependency structure, code quality, configuration, and architecture signals
 - Deterministic task generation based on analysis findings
 - Isolated execution workspaces so the original source is never mutated directly
-- Persistent local memory for analysis findings, execution outcomes, and review notes
-- CLI-first workflow with a small React UI for browsing analyses and runs
+- React frontend and REST API over the same local workspace
 
 ## Requirements
 
@@ -26,52 +25,27 @@ pnpm test
 ## Quick Start
 
 ```bash
-# Ingest and analyze a local directory
-pnpm dev ingest ./path/to/repo
-
-# Ingest a git URL
-pnpm dev ingest https://github.com/user/repo
-
-# Ingest a text brief
-pnpm dev ingest "Build a rate limiter middleware for Express"
-
-# Start the API and frontend together
+# Start the API server and frontend together
 pnpm dev:all
+
+# Start just the API server
+pnpm dev
+
+# Start just the frontend dev server
+pnpm ui:dev
 ```
 
-## CLI Commands
-
-```bash
-pnpm dev ingest <source>      # ingest, analyze, plan, and optionally execute
-pnpm dev analyze <source>     # standalone analysis
-pnpm dev tasks <source-id>    # list generated tasks
-pnpm dev run <task-id>        # execute a task in an isolated workspace
-pnpm dev review <run-id>      # inspect a run review
-pnpm dev list                 # list stored sources and runs
-pnpm dev show <id>            # inspect a source, task, or run
-pnpm dev memory               # search stored memory entries
-pnpm dev backends             # list available execution backends
-pnpm dev compare <id-a> <id-b>
-pnpm dev export <source-id>
-```
+Open the web UI, enter a local path, git URL, or text brief, and hit **Analyze**. From there you can browse the deep analysis, run generated tasks, compare sources, and export reports.
 
 ## Web UI
 
-```bash
-pnpm api:dev
-pnpm ui:dev
-pnpm dev:all
-```
-
-The frontend talks to the backend API and provides source ingestion, deep-analysis browsing, task review, and run history.
+The frontend provides source ingestion, deep-analysis browsing, task execution, source comparison, exports, and run history. The API server can also be used directly via `curl` or any HTTP client.
 
 ## Environment
 
 - `REPOWRIGHT_API_PORT`: backend API port, default `8787`
 - `REPOWRIGHT_DATA_DIR`: override the local data directory
 - `VITE_API_BASE_URL`: frontend API base URL, default `http://localhost:8787/api`
-
-Legacy `SOURCELENS_*` and `OPERATOR_*` environment variables are still accepted for compatibility.
 
 ## Local Data
 
@@ -82,10 +56,9 @@ repowright-data/
   repowright.db
   runs/
   clones/
-  memory/
 ```
 
-If a legacy `sourcelens-data/` or `operator-data/` directory already exists, RepoWright reuses it automatically. Outside a workspace root, the fallback location is `~/.repowright/`.
+If a legacy `operator-data/` directory already exists, RepoWright reuses it automatically. Outside a workspace root, the fallback location is `~/.repowright/`.
 
 ## Repo Layout
 
@@ -93,14 +66,13 @@ If a legacy `sourcelens-data/` or `operator-data/` directory already exists, Rep
 backend/
   src/
     analysis/    analysis engine and comparison logic
-    backends/    execution backend adapters
-    cli/         CLI entrypoint and commands
+    backends/    execution engine adapters
+    cli/         server entrypoint
     execution/   isolated workspace execution
     intake/      source ingestion and normalization
-    memory/      persistent knowledge store
     planning/    task generation
     review/      post-run review generation
-    routing/     backend selection
+    routing/     execution engine selection
     storage/     SQLite repository layer
     web/         Express API
 frontend/
@@ -110,10 +82,9 @@ frontend/
 ## Development
 
 ```bash
-pnpm dev <command>
-pnpm api:dev
-pnpm ui:dev
-pnpm dev:all
+pnpm dev          # start the API server
+pnpm ui:dev       # start the frontend dev server
+pnpm dev:all      # start both
 pnpm build
 pnpm test
 pnpm lint
@@ -123,8 +94,8 @@ pnpm clean
 
 ## Status
 
-- The `internal-planner` backend is the default and fully local.
-- `codex-cli` and `claude-cli` adapters are present as external CLI integrations.
+- The `internal-planner` engine is the default and fully local.
+- `codex-cli` and `claude-cli` adapters are present as external execution engine integrations.
 - Generated runtime data, editor metadata, and nested package lockfiles are excluded from git.
 
 ## License

@@ -15,14 +15,6 @@ export function writeMarkdown(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content);
 }
 
-export function readJson<T>(filePath: string): T {
-  const raw = fs.readFileSync(filePath, 'utf-8');
-  return JSON.parse(raw) as T;
-}
-
-export function pathExists(p: string): boolean {
-  return fs.existsSync(p);
-}
 
 export function copyDirRecursive(src: string, dest: string): void {
   ensureDir(dest);

@@ -4,8 +4,6 @@ export {
   ensureDir,
   writeJson,
   writeMarkdown,
-  readJson,
-  pathExists,
   copyDirRecursive,
   collectFiles,
 } from './fs.js';

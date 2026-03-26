@@ -96,6 +96,45 @@ function hasThreshold(contents: Map<string, string>, tester: (c: string) => bool
   return hits >= minHits || (hits / contents.size) >= minRatio;
 }
 
+function detectCliArchitecture(files: string[], contents: Map<string, string>): boolean {
+  const hasCliPath = files.some((file) => /(?:^|[\\/])(cli|commands?|cmd|bin)(?:[\\/]|$)/i.test(file));
+  const hasCliParser = hasThreshold(
+    contents,
+    (content) =>
+      /commander|yargs|oclif|cac|argparse|typer|click|cobra|clap|urfave\/cli|docopt|fire\b/i.test(
+        content,
+      ),
+    1,
+    0.01,
+  );
+  const hasCliCommandRegistration = hasThreshold(
+    contents,
+    (content) =>
+      /program\.command\(|program\.parse\(|ArgumentParser\(|parse_args\(|@click\.command|@app\.command|typer\.Typer|cobra\.Command|clap::Parser|derive\s*\(\s*Parser\s*\)|flag\.\w+\(/i.test(
+        content,
+      ),
+    1,
+    0.01,
+  );
+  const hasCliEntryHandling = hasThreshold(
+    contents,
+    (content) =>
+      /process\.argv|std::env::args|os\.Args|if\s+__name__\s*==\s*['"]__main__['"]|console_scripts|main\s*\(\s*\)/i.test(
+        content,
+      ),
+    1,
+    0.01,
+  );
+
+  const score =
+    (hasCliPath ? 1 : 0) +
+    (hasCliParser ? 2 : 0) +
+    (hasCliCommandRegistration ? 2 : 0) +
+    (hasCliEntryHandling ? 1 : 0);
+
+  return score >= 3 || ((hasCliParser || hasCliCommandRegistration) && hasCliEntryHandling);
+}
+
 const PATTERN_INDICATORS: Record<string, (files: string[], contents: Map<string, string>) => boolean> = {
   'MVC Pattern': (files) =>
     files.filter((f) => f.includes('controller')).length >= 2 &&
@@ -105,7 +144,7 @@ const PATTERN_INDICATORS: Record<string, (files: string[], contents: Map<string,
   'Service Layer': (files) => files.filter((f) => /[\\/]services?[\\/]/i.test(f)).length >= Math.min(files.length * 0.05, 3),
   'Middleware Chain': (_files, contents) => hasThreshold(contents, (c) => /app\.use\(/i.test(c)),
   'Event-Driven': (_files, contents) => hasThreshold(contents, (c) => /\.on\(|\.emit\(|EventEmitter|addEventListener/i.test(c)),
-  'CLI Architecture': (files) => files.some((f) => /[\\/]cli[\\/]|[\\/]commands?[\\/]/i.test(f)),
+  'CLI Architecture': (files, contents) => detectCliArchitecture(files, contents),
   'REST API': (_files, contents) => hasThreshold(contents, (c) => /app\.(get|post|put|delete|patch)\s*\(/i.test(c) || /@app\.(get|post|put|delete|patch)\s*\(/i.test(c) || /APIRouter|FastAPI\(\)/i.test(c)),
   GraphQL: (_files, contents) => hasThreshold(contents, (c) => /typeDefs|resolvers|gql`|graphql/i.test(c)),
   'State Management': (_files, contents) => hasThreshold(contents, (c) => /useReducer|createStore|createSlice|zustand|recoil|jotai/i.test(c), 1, 0.01),

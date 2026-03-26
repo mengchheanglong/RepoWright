@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AnalysisReport, CandidateTask, ExecutionRun, ReviewReport, RunArtifact } from '../domain/index.js';
+import { backendDisplayName } from '../routing/router.js';
 import type { Repository } from '../storage/repository.js';
 import { writeJson, writeMarkdown } from '../utils/fs.js';
 import { generateId, now } from '../utils/id.js';
@@ -27,7 +28,7 @@ export function generateReview(input: ReviewInput): ReviewReport {
   const review: ReviewReport = {
     id: generateId('rev'),
     runId: run.id,
-    attempted: `Task "${task.title}" was executed via ${run.backend} backend.`,
+    attempted: `Task "${task.title}" was executed via ${backendDisplayName(run.backend)}.`,
     changed: evaluation.changedSummary,
     succeeded: succeeded
       ? `Task completed successfully. Definition of done: "${task.definitionOfDone}".`
@@ -168,7 +169,7 @@ function deriveNextAction(
   if (doneScore < 0.5) {
     return `Task completed but output quality is low (score: ${(doneScore * 100).toFixed(0)}%). Review artifacts in ${path.dirname(run.workspacePath)} and consider re-running with more specific guidance.`;
   }
-  return `Review generated artifacts in ${path.dirname(run.workspacePath)}. Quality score: ${(doneScore * 100).toFixed(0)}%. Consider extracting reusable knowledge to memory.`;
+  return `Review generated artifacts in ${path.dirname(run.workspacePath)}. Quality score: ${(doneScore * 100).toFixed(0)}%.`;
 }
 
 function formatReviewMarkdown(
@@ -185,7 +186,7 @@ function formatReviewMarkdown(
   return `# Review: ${task.title}
 
 ## Run: ${run.id}
-- **Backend:** ${run.backend}
+- **Execution Engine:** ${backendDisplayName(run.backend)}
 - **Status:** ${run.status}
 - **Started:** ${run.startedAt ?? 'N/A'}
 - **Completed:** ${run.completedAt ?? 'N/A'}

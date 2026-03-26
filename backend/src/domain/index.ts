@@ -10,7 +10,6 @@ export {
   ExecutionRun,
   RunArtifact,
   ReviewReport,
-  MemoryEntry,
   DeepAnalysis,
   ComponentInfo,
   ImprovementItem,

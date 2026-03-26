@@ -136,4 +136,62 @@ describe('analyzeSource', () => {
     expect(alt.some((s) => /native acceleration path/i.test(s.strategy))).toBe(true);
     fs.rmSync(tmpDir, { recursive: true });
   });
+
+  it('does not infer CLI architecture from folder names alone', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'op-analyze-cli-noise-'));
+    fs.mkdirSync(path.join(tmpDir, 'src', 'cli'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'src', 'commands'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src', 'cli', 'helpers.ts'),
+      'export function formatLabel(value: string) { return value.trim(); }\n',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'src', 'commands', 'registry.ts'),
+      'export const commandRegistry = new Map<string, string>();\n',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'src', 'server.ts'),
+      'import express from "express";\nconst app = express();\napp.get("/health", (_req, res) => res.json({ ok: true }));\n',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'cli-noise', dependencies: { express: '^5.0.0' } }),
+    );
+
+    const source = makeSource({ type: 'directory', location: tmpDir, name: 'cli-noise' });
+    const report = analyzeSource(source, config);
+    const patterns = report.deepAnalysis?.coreSystem.patterns ?? [];
+    const architecture = report.deepAnalysis?.coreSystem.architecture ?? '';
+
+    expect(patterns).not.toContain('CLI Architecture');
+    expect(architecture).not.toContain('CLI application');
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('detects CLI architecture when command parsing evidence exists', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'op-analyze-cli-real-'));
+    fs.mkdirSync(path.join(tmpDir, 'src', 'cli'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'src', 'cli', 'index.ts'),
+      [
+        'import { Command } from "commander";',
+        'const program = new Command();',
+        'program.command("scan").action(() => console.log("scan"));',
+        'program.parse(process.argv);',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'cli-real', dependencies: { commander: '^12.0.0' } }),
+    );
+
+    const source = makeSource({ type: 'directory', location: tmpDir, name: 'cli-real' });
+    const report = analyzeSource(source, config);
+    const patterns = report.deepAnalysis?.coreSystem.patterns ?? [];
+    const entryPoints = report.deepAnalysis?.coreSystem.entryPoints ?? [];
+
+    expect(patterns).toContain('CLI Architecture');
+    expect(entryPoints.some((entry) => entry.includes('CLI entry'))).toBe(true);
+    fs.rmSync(tmpDir, { recursive: true });
+  });
 });

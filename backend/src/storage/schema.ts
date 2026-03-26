@@ -88,13 +88,3 @@ export const reviews = sqliteTable('reviews', {
   findings: text('findings'), // JSON array string
   createdAt: text('created_at').notNull(),
 });
-
-export const memory = sqliteTable('memory', {
-  id: text('id').primaryKey(),
-  category: text('category').notNull(),
-  title: text('title').notNull(),
-  content: text('content').notNull(),
-  tags: text('tags').notNull(), // JSON array string
-  sourceId: text('source_id'),
-  createdAt: text('created_at').notNull(),
-});

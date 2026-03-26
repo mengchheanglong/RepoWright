@@ -389,7 +389,7 @@ const TASK_TEMPLATES: Record<string, TaskTemplate[]> = {
       rationaleFn: () => 'Proper archiving beats deletion — you might need it later.',
       valueFn: () => 'Searchable archive entry.',
       difficulty: 'trivial',
-      doneFn: () => 'Memory entry with source metadata and triage decision.',
+      doneFn: () => 'Source archived with metadata and triage decision.',
       riskFn: () => 'Archive may accumulate noise.',
     },
   ],

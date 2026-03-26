@@ -3,11 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const DATA_DIR_NAME = 'repowright-data';
-const LEGACY_DATA_DIR_NAMES = ['sourcelens-data', 'operator-data'] as const;
+const LEGACY_DATA_DIR_NAMES = ['operator-data'] as const;
 const HOME_DATA_DIR_NAME = '.repowright';
-const LEGACY_HOME_DATA_DIR_NAMES = ['.sourcelens', '.operator'] as const;
+const LEGACY_HOME_DATA_DIR_NAMES = ['.operator'] as const;
 const DB_FILENAME = 'repowright.db';
-const LEGACY_DB_FILENAMES = ['sourcelens.db', 'operator.db'] as const;
+const LEGACY_DB_FILENAMES = ['operator.db'] as const;
 
 export interface OperatorConfig {
   dataDir: string;
@@ -22,7 +22,6 @@ export interface OperatorConfig {
 function resolveDataDir(): string {
   const explicitDataDir =
     process.env.REPOWRIGHT_DATA_DIR ??
-    process.env.SOURCELENS_DATA_DIR ??
     process.env.OPERATOR_DATA_DIR;
   if (explicitDataDir) {
     return explicitDataDir;

@@ -26,7 +26,7 @@ export const RunStatus = z.enum([
 ]);
 export type RunStatus = z.infer<typeof RunStatus>;
 
-export const BackendType = z.enum(['internal-planner', 'codex-cli', 'claude-cli']);
+export const BackendType = z.enum(['internal-planner']);
 export type BackendType = z.infer<typeof BackendType>;
 
 export const Difficulty = z.enum(['trivial', 'easy', 'moderate', 'hard', 'complex']);
@@ -304,17 +304,6 @@ export const ReviewReport = z.object({
   createdAt: z.string().datetime(),
 });
 export type ReviewReport = z.infer<typeof ReviewReport>;
-
-export const MemoryEntry = z.object({
-  id: z.string(),
-  category: z.string(),
-  title: z.string(),
-  content: z.string(),
-  tags: z.array(z.string()),
-  sourceId: z.string().optional(),
-  createdAt: z.string().datetime(),
-});
-export type MemoryEntry = z.infer<typeof MemoryEntry>;
 
 // --- Analysis Comparison ---
 

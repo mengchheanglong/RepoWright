@@ -9,7 +9,7 @@ export interface ExecutionResult {
 
 export interface BackendAdapter {
   readonly name: string;
-  readonly type: 'internal-planner' | 'codex-cli' | 'claude-cli';
+  readonly type: 'internal-planner';
 
   /** Returns true if this backend is available for execution */
   isAvailable(): boolean;

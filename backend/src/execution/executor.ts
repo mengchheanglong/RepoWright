@@ -10,7 +10,7 @@ import type {
   RunArtifact,
   Source,
 } from '../domain/index.js';
-import { selectBackend } from '../routing/router.js';
+import { backendDisplayName, selectBackend } from '../routing/router.js';
 import type { Repository } from '../storage/repository.js';
 import { copyDirRecursive, ensureDir, writeJson, writeMarkdown } from '../utils/fs.js';
 import { generateId, now } from '../utils/id.js';
@@ -34,7 +34,7 @@ export interface ExecuteOptions {
   analysis: AnalysisReport;
   config: OperatorConfig;
   repo: Repository;
-  backend?: 'internal-planner' | 'codex-cli' | 'claude-cli';
+  backend?: 'internal-planner';
 }
 
 export async function executeTask(opts: ExecuteOptions): Promise<ExecutionRun> {
@@ -97,7 +97,6 @@ export async function executeTask(opts: ExecuteOptions): Promise<ExecutionRun> {
       task,
       source,
       result,
-      selectedBackend.type,
       artifactRecords,
     );
     finalizeRunStatus(runId, result, repo, logger);
@@ -222,7 +221,6 @@ function saveRunMetadata(
   task: CandidateTask,
   source: Source,
   result: ExecutionResult,
-  backendType: string,
   artifactRecords: RunArtifact[],
 ): void {
   writeJson(path.join(runDir, 'run.json'), {
@@ -237,7 +235,7 @@ function saveRunMetadata(
   const artifactList = artifactRecords.map((a) => `- ${a.description}`).join('\n');
   writeMarkdown(
     path.join(runDir, 'summary.md'),
-    `# Run ${runId}\n\n**Task:** ${task.title}\n**Source:** ${source.name}\n**Status:** ${status}\n**Backend:** ${backendType}\n\n## Output\n${result.output}\n\n## Artifacts\n${artifactList}\n`,
+    `# Run ${runId}\n\n**Task:** ${task.title}\n**Source:** ${source.name}\n**Status:** ${status}\n**Execution Engine:** ${backendDisplayName(run.backend)}\n\n## Output\n${result.output}\n\n## Artifacts\n${artifactList}\n`,
   );
 }
 

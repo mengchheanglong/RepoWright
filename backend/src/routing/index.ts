@@ -1,1 +1,1 @@
-export { selectBackend, listBackends } from './router.js';
+export { selectBackend } from './router.js';
