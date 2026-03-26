@@ -270,6 +270,7 @@ export const ExecutionRun = z.object({
   id: z.string(),
   taskId: z.string(),
   sourceId: z.string(),
+  idempotencyKey: z.string().optional(),
   status: RunStatus,
   backend: BackendType,
   workspacePath: z.string(),

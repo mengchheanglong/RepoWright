@@ -78,6 +78,18 @@ h1 {
   color: var(--muted);
 }
 
+.hero-presets {
+  margin-top: 0.8rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.hero-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 .ingest-form {
   margin-top: 1rem;
   display: grid;

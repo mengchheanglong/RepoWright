@@ -128,4 +128,41 @@ describe('Repository', () => {
       expect(tasks).toHaveLength(2);
     });
   });
+
+  describe('runs', () => {
+    it('supports idempotent run lookup by task and key', () => {
+      repo.saveSource(testSource);
+      repo.saveAnalysis(testAnalysis);
+      repo.saveTasks([
+        {
+          id: 'tsk_run',
+          analysisId: 'anl_test1',
+          sourceId: 'src_test1',
+          title: 'Run task',
+          rationale: 'r',
+          expectedValue: 'v',
+          difficulty: 'easy',
+          definitionOfDone: 'd',
+          riskNotes: 'n',
+          order: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      ]);
+
+      repo.saveRun({
+        id: 'run_1',
+        taskId: 'tsk_run',
+        sourceId: 'src_test1',
+        idempotencyKey: 'idemp-123',
+        status: 'created',
+        backend: 'internal-planner',
+        workspacePath: '/tmp/workspace',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const existing = repo.getRunByTaskAndIdempotency('tsk_run', 'idemp-123');
+      expect(existing?.id).toBe('run_1');
+      expect(existing?.idempotencyKey).toBe('idemp-123');
+    });
+  });
 });

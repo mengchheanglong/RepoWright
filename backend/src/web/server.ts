@@ -9,6 +9,7 @@ import { executeTask } from '../execution/index.js';
 import { ingestSource } from '../intake/index.js';
 import { generateTasks } from '../planning/index.js';
 import { generateReview } from '../review/index.js';
+import { listBackendCapabilities } from '../routing/router.js';
 import { closeDatabase, getDatabase } from '../storage/database.js';
 import { Repository } from '../storage/repository.js';
 import { initLogger } from '../utils/logger.js';
@@ -49,6 +50,15 @@ app.get('/api/health', (_req: Request, res: Response) => {
     ok: true,
     dataDir: config.dataDir,
     runsDir: config.runsDir,
+  });
+});
+
+app.get('/api/capabilities', (_req: Request, res: Response) => {
+  res.json({
+    apiVersion: '2026-03-26',
+    runRequestSchemaVersion: '1.1.0',
+    runIdempotency: { supported: true, field: 'idempotencyKey' },
+    backends: listBackendCapabilities(),
   });
 });
 
@@ -103,6 +113,34 @@ app.get('/api/tasks/:sourceId', (req: Request, res: Response) => {
     return res.status(404).json({ error: `Source not found: ${sourceId ?? 'unknown'}` });
   }
   return res.json({ tasks: repo.getTasksBySource(source.id) });
+});
+
+app.get('/api/next-task/:sourceId', (req: Request, res: Response) => {
+  const sourceId = pickParam(req.params.sourceId);
+  if (!sourceId) {
+    return res.status(400).json({ error: 'Source ID is required.' });
+  }
+
+  const source = repo.getSource(sourceId);
+  if (!source) {
+    return res.status(404).json({ error: `Source not found: ${sourceId}` });
+  }
+
+  const tasks = repo.getTasksBySource(sourceId);
+  const runs = repo.listRuns().filter((run) => run.sourceId === sourceId);
+  const runSet = new Set(runs.map((run) => run.taskId));
+  const pending = tasks.filter((task) => !runSet.has(task.id));
+  const nextTask = pending.sort((a, b) => a.order - b.order)[0] ?? null;
+
+  return res.json({
+    sourceId,
+    nextTask,
+    summary: nextTask
+      ? `Next suggested task is #${nextTask.order}: ${nextTask.title}`
+      : 'No pending tasks remain for this source.',
+    pendingTaskCount: pending.length,
+    runCount: runs.length,
+  });
 });
 
 app.get('/api/review/:runId', (req: Request, res: Response) => {
@@ -291,6 +329,9 @@ app.post('/api/ingest', (req: Request, res: Response) => {
 app.post('/api/run', async (req: Request, res: Response) => {
   try {
     const taskId = typeof req.body?.taskId === 'string' ? req.body.taskId.trim() : '';
+    const idempotencyKey = typeof req.body?.idempotencyKey === 'string'
+      ? req.body.idempotencyKey.trim()
+      : '';
     if (!taskId) {
       return res.status(400).json({ error: 'Request field "taskId" is required.' });
     }
@@ -310,10 +351,23 @@ app.post('/api/run', async (req: Request, res: Response) => {
       return res.status(400).json({ error: `No analysis found for source: ${task.sourceId}` });
     }
 
-    const run = await executeTask({ task, source, analysis, config, repo });
+    if (idempotencyKey) {
+      const existing = repo.getRunByTaskAndIdempotency(task.id, idempotencyKey);
+      if (existing) {
+        const review = repo.getReview(existing.id);
+        return res.status(200).json({
+          run: existing,
+          review,
+          reused: true,
+          message: 'Idempotency key matched an existing run.',
+        });
+      }
+    }
+
+    const run = await executeTask({ task, source, analysis, config, repo, idempotencyKey: idempotencyKey || undefined });
     const review = generateReview({ run, task, analysis, repo });
 
-    return res.status(201).json({ run, review });
+    return res.status(201).json({ run, review, reused: false });
   } catch (error) {
     return handleError(error, res);
   }
