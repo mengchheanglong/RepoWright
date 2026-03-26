@@ -1,46 +1,47 @@
-# Implementation Plan — Personal AI Engineering Operator v1
+# Implementation Plan - RepoWright v1
 
 ## Architecture Overview
 
-```
+```text
 CLI Layer (commander)
-  │
-  ▼
+  |
+  v
 Service Layer (intake, analysis, planning, routing, execution, review)
-  │
-  ▼
+  |
+  v
 Domain Layer (types, schemas, state machine)
-  │
-  ▼
+  |
+  v
 Storage Layer (SQLite via better-sqlite3, file artifacts)
 ```
 
-**Data flow for `operator ingest <source>`:**
-```
-source input → intake.ingest() → storage.saveSource()
-            → analysis.analyze() → storage.saveAnalysis()
-            → planning.generateTasks() → storage.saveTasks()
-            → [user selects task]
-            → routing.selectBackend() → executor.run()
-            → review.generate() → storage.saveReview()
+**Data flow for `repowright ingest <source>`:**
+
+```text
+source input -> intake.ingest() -> storage.saveSource()
+            -> analysis.analyze() -> storage.saveAnalysis()
+            -> planning.generateTasks() -> storage.saveTasks()
+            -> [user selects task]
+            -> routing.selectBackend() -> executor.run()
+            -> review.generate() -> storage.saveReview()
 ```
 
-## Scope — What v1 Delivers
+## Scope - What v1 Delivers
 
 1. **Ingest** local directories, git URLs, and plain text briefs
-2. **Analyze** sources: produce summary, classify work type, score complexity
+2. **Analyze** sources and produce summary, classification, and scoring
 3. **Generate 3 tasks** with structured metadata
-4. **Execute one task** via internal-planner backend in an isolated workspace
-5. **Persist everything** to SQLite + disk artifacts (JSON, markdown, JSONL logs)
+4. **Execute one task** via `internal-planner` in an isolated workspace
+5. **Persist everything** to SQLite plus disk artifacts
 6. **Review** completed runs with a structured report
-7. **CLI commands:** ingest, analyze, tasks, run, review, list, show
+7. **Expose CLI commands** for ingest, analyze, tasks, run, review, list, and show
 
-## Scope — What v1 Does NOT Deliver
+## Scope - What v1 Does Not Deliver
 
-- Real codex-cli or claude-cli execution (stubbed adapters only)
-- Semantic search over knowledge store
-- Git integration (commit, branch, PR creation)
-- PDF ingestion (extension point only)
+- Full autonomous `codex-cli` or `claude-cli` execution flows
+- Semantic search over the knowledge store
+- Branch or pull request automation
+- PDF ingestion
 - Automated test generation for produced changes
 - Repo-specific rule configuration
 
@@ -49,53 +50,52 @@ source input → intake.ingest() → storage.saveSource()
 | # | Milestone | Contents |
 |---|-----------|----------|
 | 1 | Foundation | Project scaffold, domain types, config, SQLite schema, logger |
-| 2 | Intake | Source ingestion for directory, git URL, text brief |
+| 2 | Intake | Source ingestion for directory, git URL, and text brief |
 | 3 | Analysis | Summary generation, classification, scoring |
 | 4 | Planning | Task generation from analysis results |
-| 5 | Execution | Isolated workspace, internal-planner backend, artifact saving |
+| 5 | Execution | Isolated workspace, `internal-planner`, artifact saving |
 | 6 | Review | Post-run review report generation |
-| 7 | CLI | All commands wired up end-to-end |
-| 8 | Tests & Docs | Core logic tests, README, architecture doc |
+| 7 | CLI | Commands wired end to end |
+| 8 | Tests and Docs | Core logic tests, README, architecture doc |
 
 ## Key Tradeoffs
 
 | Decision | Rationale |
 |----------|-----------|
-| better-sqlite3 (sync) over async DB | Simpler code, CLI workload is single-threaded, no concurrency needs |
-| Lightweight ORM (Drizzle) | Keeps repository code typed while staying simple and SQLite-focused |
-| Internal analysis (heuristic) over LLM-dependent | v1 must work offline without API keys; LLM backends added later |
-| Single-process execution | No need for job queues or workers at this scale |
-| nanoid for IDs | Short, URL-safe, no UUID dependency |
-| Biome over ESLint+Prettier | Single tool for lint+format, faster, fewer config files |
+| `better-sqlite3` over async DB | Simpler code for a local CLI-first workload |
+| Drizzle ORM | Typed repository code without heavy migration infrastructure |
+| Heuristic analysis over LLM dependency | Keeps the core pipeline offline and deterministic |
+| Single-process execution | Enough for current scale and operating model |
+| `nanoid` for IDs | Short, URL-safe identifiers with no UUID dependency |
+| Biome for lint and format | One fast tool instead of separate lint and formatting stacks |
 
 ## Risks
 
 | Risk | Mitigation |
 |------|------------|
-| Git clone failures (network, auth) | Graceful error handling, clear messages, fallback to manual clone |
-| Large repos overwhelming analysis | Set file count/size limits on heuristic analysis |
-| Scope creep in "analysis" | Keep v1 analysis deterministic/heuristic, no LLM calls |
-| SQLite schema migrations | Use a simple version table, manual migrations for now |
+| Git clone failures | Graceful error handling and clear messages |
+| Large repos overwhelming analysis | File count and file size limits |
+| Analysis scope creep | Keep the core pipeline deterministic |
+| Schema changes over time | Maintain a simple versioned schema strategy |
 
 ## Test Strategy
 
-- **Unit tests:** Domain model validation, analysis heuristics, task generation logic, state transitions
-- **Integration tests:** Full ingest→analyze→plan→execute→review pipeline with temp directories
-- **No E2E CLI tests in v1** — test the service layer, not arg parsing
-- **Test fixtures:** Small sample directories and text briefs in `backend/tests/fixtures/`
+- **Unit tests:** domain validation, analysis heuristics, task generation, and state transitions
+- **Integration tests:** ingest -> analyze -> plan -> execute -> review pipeline with temp directories
+- **No E2E CLI tests in v1:** focus on the service layer rather than commander wiring
 
-## Storage Schema (SQLite)
+## Storage Schema
 
-**sources** — ingested source records
-**analyses** — analysis results linked to sources
-**tasks** — candidate tasks linked to analyses
-**runs** — execution run records linked to tasks
-**artifacts** — run artifact metadata
-**memory** — reusable knowledge entries
+- **sources:** ingested source records
+- **analyses:** analysis results linked to sources
+- **tasks:** candidate tasks linked to analyses
+- **runs:** execution run records linked to tasks
+- **artifacts:** run artifact metadata
+- **memory:** reusable knowledge entries
 
 ## File Artifact Layout
 
-```
+```text
 runs/<run-id>/
   summary.md
   analysis.json
@@ -103,5 +103,5 @@ runs/<run-id>/
   run.json
   review.md
   logs.jsonl
-  workspace/    # isolated copy of source for execution
+  workspace/
 ```

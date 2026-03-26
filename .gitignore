@@ -1,6 +1,11 @@
 # Dependencies
 node_modules/
 **/node_modules/
+.pnpm-store/
+
+# Workspace lockfiles
+**/pnpm-lock.yaml
+!pnpm-lock.yaml
 
 # Build artifacts
 dist/
@@ -12,16 +17,17 @@ coverage/
 **/coverage/
 *.tsbuildinfo
 
-# Runtime and local operator data
-runs/*/
-!runs/.gitkeep
+# Local runtime data
+repowright-data/
+sourcelens-data/
 operator-data/
-operator-data/clones/
-operator-data/runs/
+docs/
 
 # Databases and local state
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 
@@ -43,9 +49,11 @@ temp/
 # Tool caches
 .turbo/
 .cache/
+.parcel-cache/
 .vite/
 
 # OS/editor files
+.claude/
 .DS_Store
 Thumbs.db
 .idea/

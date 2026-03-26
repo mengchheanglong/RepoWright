@@ -1,6 +1,6 @@
 import type { BackendAdapter } from '../backends/adapter.js';
-import { ClaudeCliBackend } from '../backends/claude-stub.js';
-import { CodexCliBackend } from '../backends/codex-stub.js';
+import { ClaudeCliBackend } from '../backends/claude-cli.js';
+import { CodexCliBackend } from '../backends/codex-cli.js';
 import { InternalPlannerBackend } from '../backends/internal-planner.js';
 import type { BackendType } from '../domain/index.js';
 import { getLogger } from '../utils/logger.js';
@@ -26,7 +26,7 @@ export function selectBackend(preferred?: BackendType): BackendAdapter {
   const available = backends.find((b) => b.isAvailable());
   if (!available) {
     throw new Error(
-      'No available backend. This should not happen — internal-planner is always available.',
+      'No available backend. This should not happen - internal-planner is always available.',
     );
   }
   logger.info(`Selected backend: ${available.name}`);

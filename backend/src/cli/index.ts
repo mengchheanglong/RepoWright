@@ -18,8 +18,8 @@ import { handleTasks } from './commands/tasks.js';
 const program = new Command();
 
 program
-  .name('sourcelens')
-  .description('SourceLens — source code analyzer and engineering knowledge workbench')
+  .name('repowright')
+  .description('RepoWright - source code analyzer and engineering knowledge workbench')
   .version('0.1.0');
 
 program
@@ -71,14 +71,11 @@ program
   .option('-s, --search <keyword>', 'search memory by keyword')
   .action(wrap(handleMemory));
 
-program
-  .command('backends')
-  .description('List available execution backends')
-  .action(wrap(handleBackends));
+program.command('backends').description('List available execution backends').action(wrap(handleBackends));
 
 program
   .command('compare')
-  .description('Compare two analyses — diff metrics between sources or over time')
+  .description('Compare two analyses - diff metrics between sources or over time')
   .argument('<id-a>', 'First source ID or analysis ID')
   .argument('<id-b>', 'Second source ID or analysis ID')
   .action(wrap(handleCompare));
@@ -100,7 +97,7 @@ function wrap(fn: (...args: any[]) => Promise<void>): (...args: any[]) => Promis
     } catch (err) {
       if (err instanceof Error) {
         console.error(chalk.red(`Error: ${err.message}`));
-        if (process.env.OPERATOR_DEBUG) {
+        if (process.env.REPOWRIGHT_DEBUG ?? process.env.SOURCELENS_DEBUG ?? process.env.OPERATOR_DEBUG) {
           console.error(err.stack);
         }
       } else {

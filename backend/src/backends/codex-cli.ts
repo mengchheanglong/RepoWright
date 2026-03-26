@@ -7,6 +7,7 @@ import type { BackendAdapter, ExecutionResult } from './adapter.js';
 import { isCliAvailable } from './cli-detect.js';
 import { detectChangedFiles } from './file-detect.js';
 import { buildTaskPrompt } from './prompt-builder.js';
+import { GENERATED_PROMPT_FILENAME, promptFileExcludes } from './prompt-file.js';
 
 /**
  * Codex CLI backend adapter.
@@ -47,7 +48,7 @@ export class CodexCliBackend implements BackendAdapter {
     }
 
     const prompt = buildTaskPrompt(task, source, analysis);
-    const promptFile = path.join(workspacePath, '.operator-prompt.md');
+    const promptFile = path.join(workspacePath, GENERATED_PROMPT_FILENAME);
     fs.writeFileSync(promptFile, prompt);
 
     logger.info(`[codex-cli] Executing: ${task.title}`);
@@ -72,11 +73,11 @@ export class CodexCliBackend implements BackendAdapter {
       fs.writeFileSync(path.join(workspacePath, outputFile), `# Codex Output\n\n${output}\n`);
 
       const artifacts: ExecutionResult['artifacts'] = [
-        { type: 'prompt', filename: '.operator-prompt.md', content: prompt },
+        { type: 'prompt', filename: GENERATED_PROMPT_FILENAME, content: prompt },
         { type: 'codex-output', filename: outputFile, content: output },
       ];
 
-      const changedFiles = detectChangedFiles(workspacePath, ['.operator-prompt.md', outputFile]);
+      const changedFiles = detectChangedFiles(workspacePath, promptFileExcludes([outputFile]));
       if (changedFiles.length > 0) {
         const manifest = changedFiles.map((f) => `- ${f}`).join('\n');
         const manifestFile = 'changed-files.md';
@@ -95,7 +96,7 @@ export class CodexCliBackend implements BackendAdapter {
       return {
         success: false,
         output: '',
-        artifacts: [{ type: 'prompt', filename: '.operator-prompt.md', content: prompt }],
+        artifacts: [{ type: 'prompt', filename: GENERATED_PROMPT_FILENAME, content: prompt }],
         error: `Codex CLI failed: ${message}`,
       };
     }

@@ -12,7 +12,7 @@ export async function handleTasks(sourceId: string): Promise<void> {
   if (tasks.length === 0) {
     console.log(
       chalk.dim(
-        'No tasks found for this source. Run "operator ingest" or "operator analyze" first.',
+        'No tasks found for this source. Run "repowright ingest" or "repowright analyze" first.',
       ),
     );
     return;

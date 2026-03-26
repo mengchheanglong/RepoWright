@@ -15,13 +15,11 @@ interface IngestOptions {
 export async function handleIngest(source: string, options?: IngestOptions): Promise<void> {
   const { config, repo } = getContext();
 
-  // 1. Ingest
   console.log(chalk.blue('Ingesting source...'));
   const src = ingestSource(source, config);
   repo.saveSource(src);
   console.log(chalk.green(`Source ingested: ${src.id} (${src.type}: ${src.name})`));
 
-  // 2. Analyze
   console.log(chalk.blue('\nAnalyzing...'));
   const analysis = analyzeSource(src, config);
   repo.saveAnalysis(analysis);
@@ -37,12 +35,10 @@ export async function handleIngest(source: string, options?: IngestOptions): Pro
     }
   }
 
-  // 3. Generate tasks
   console.log(chalk.blue('\nGenerating tasks...'));
   const tasks = generateTasks(analysis);
   repo.saveTasks(tasks);
 
-  // Auto-save key findings to memory
   const memEntries = autoSaveAnalysisFindings(analysis, repo);
   if (memEntries.length > 0) {
     console.log(chalk.dim(`  Auto-saved ${memEntries.length} finding(s) to memory`));
@@ -57,23 +53,22 @@ export async function handleIngest(source: string, options?: IngestOptions): Pro
     console.log('');
   }
 
-  // 4. Prompt user to select a task
   const choices = [
     ...tasks.map((t) => ({ name: `[${t.order}] ${t.title} (${t.difficulty})`, value: t.id })),
-    { name: 'Skip — do not execute any task now', value: 'skip' },
+    { name: 'Skip - do not execute any task now', value: 'skip' },
   ];
 
   const selected = await select({ message: 'Select a task to execute:', choices });
 
   if (selected === 'skip') {
-    console.log(chalk.dim('\nSkipped execution. Use "operator run <task-id>" to run later.'));
+    console.log(chalk.dim('\nSkipped execution. Use "repowright run <task-id>" to run later.'));
     console.log(chalk.dim(`Source ID: ${src.id}`));
     return;
   }
 
-  // 5. Execute
   const task = tasks.find((t) => t.id === selected);
   if (!task) return;
+
   console.log(chalk.blue(`\nExecuting: ${task.title}...`));
   const run = await executeTask({
     task,
@@ -85,11 +80,9 @@ export async function handleIngest(source: string, options?: IngestOptions): Pro
   });
   console.log(chalk.green(`Run ${run.id}: ${run.status}`));
 
-  // 6. Review
   console.log(chalk.blue('\nGenerating review...'));
   const review = generateReview({ run, task, analysis, repo });
 
-  // Auto-save execution outcome to memory
   autoSaveExecutionOutcome(run, task, review, repo);
 
   console.log(chalk.green('Review complete.'));

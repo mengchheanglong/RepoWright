@@ -1,4 +1,5 @@
-import type { CodeQuality, DeepAnalysis, DependencyGraph, OptimizationSuggestion } from '../../domain/index.js';
+import type { CodeQuality, DeepAnalysis, DependencyGraph, ImprovementItem, OptimizationSuggestion } from '../../domain/index.js';
+import type { HealthScore } from './health-score.js';
 
 type PythonHotspotSignals = {
   score: number;
@@ -52,11 +53,14 @@ function detectPythonHotspots(fileContents: Map<string, string>): PythonHotspotS
 export function generateOptimizations(
   languages: string[],
   frameworks: string[],
+  patterns: string[],
   filePaths: string[],
   fileContents: Map<string, string>,
   _fileCount: number,
   cq: CodeQuality,
   depGraph: DependencyGraph,
+  improvements?: ImprovementItem[],
+  healthScore?: HealthScore,
 ): DeepAnalysis['optimizations'] {
   const simplification: OptimizationSuggestion[] = [];
   const alternativeStack: OptimizationSuggestion[] = [];
@@ -68,90 +72,165 @@ export function generateOptimizations(
   const perfMentions = (sample.match(/performance|slow|latency|throughput|optimi[sz]e/gi) ?? []).length;
   const hasNativeInterop = /ffi|cffi|pyo3|maturin|napi|neon|wasm|wasm-bindgen/i.test(sample);
   const pythonHotspots = detectPythonHotspots(fileContents);
+  const hasCircularDeps = depGraph.circularDeps.length > 0;
+  const grade = healthScore?.grade ?? 'C';
 
+  // ── Simplification ──────────────────────────────────────────────────
+
+  // Orphan files — with specific file list
+  if (depGraph.orphanFiles.length > 3) {
+    const topOrphans = depGraph.orphanFiles.slice(0, 3).join(', ');
+    simplification.push({
+      strategy: `Remove ${depGraph.orphanFiles.length} potentially dead files`,
+      description: `Not imported by any other module: ${topOrphans}${depGraph.orphanFiles.length > 3 ? ` and ${depGraph.orphanFiles.length - 3} more` : ''}. Verify they are unused before removing.`,
+      impact: 'medium',
+      effort: 'low',
+    });
+  }
+
+  // Large files — with specific targets
+  if (cq.largeFiles.length > 0) {
+    const top = cq.largeFiles[0]!;
+    const topFiles = cq.largeFiles.slice(0, 3).map((f) => `${f.path} (${f.lines})`).join(', ');
+    simplification.push({
+      strategy: `Split ${cq.largeFiles.length} oversized file(s)`,
+      description: `Largest: ${topFiles}. Extract cohesive helper modules — aim for <300 lines per file.`,
+      impact: top.lines > 1000 ? 'high' : 'medium',
+      effort: cq.largeFiles.length > 5 ? 'high' : 'medium',
+    });
+  }
+
+  // Circular dependencies — specific cycle-breaking suggestions
+  if (hasCircularDeps) {
+    const shortestCycle = depGraph.circularDeps.reduce((a, b) => a.length <= b.length ? a : b);
+    simplification.push({
+      strategy: `Break ${depGraph.circularDeps.length} circular dependency chain(s)`,
+      description: `Example: ${shortestCycle.join(' -> ')}. Extract shared types/interfaces into a common module that both sides import.`,
+      impact: 'high',
+      effort: depGraph.circularDeps.length > 3 ? 'high' : 'medium',
+    });
+  }
+
+  // Central module coupling — with specific module data
+  if (depGraph.centralModules.length > 0) {
+    const top = depGraph.centralModules[0]!;
+    if (top.importedByCount > 20) {
+      const pct = cq.totalFunctions > 0 ? Math.round((top.importedByCount / filePaths.length) * 100) : 0;
+      simplification.push({
+        strategy: `Reduce coupling to ${top.file}`,
+        description: `Imported by ${top.importedByCount} modules (${pct}% of codebase). Consider splitting into focused sub-modules or using dependency injection to reduce blast radius of changes.`,
+        impact: 'high',
+        effort: 'medium',
+      });
+    }
+  }
+
+  // Framework-specific simplification
   if (frameworks.includes('Express') && !frameworks.includes('NestJS') && filePaths.filter((f) => /server|api|route/i.test(f)).length >= 3) {
-    simplification.push({ strategy: 'Evaluate lighter HTTP runtime', description: 'Express is used across several server/API modules. If startup/latency is a constraint, benchmark a lighter router/runtime before migration.', impact: 'medium', effort: 'medium' });
+    simplification.push({ strategy: 'Evaluate lighter HTTP runtime', description: 'Express is used across several server/API modules. Consider Fastify or Hono for better performance with similar API.', impact: 'medium', effort: 'medium' });
   }
 
   const reactFiles = filePaths.filter((f) => f.endsWith('.jsx') || f.endsWith('.tsx'));
-  // Also count .js files that actually contain React/JSX patterns
   const reactJsFiles = [...fileContents.entries()].filter(([fp, content]) =>
     fp.endsWith('.js') && /React\.|createElement\(|ReactDOM|useState|useEffect/i.test(content),
   ).length;
   const totalReactFiles = reactFiles.length + reactJsFiles;
   if (frameworks.includes('React') && totalReactFiles <= 3 && totalReactFiles > 0) {
-    simplification.push({ strategy: 'Replace React with Preact or vanilla JS', description: `Only ${totalReactFiles} component file(s) found. Preact (3KB) or vanilla JS would cut bundle size dramatically.`, impact: 'medium', effort: 'medium' });
+    simplification.push({ strategy: 'Replace React with Preact or vanilla JS', description: `Only ${totalReactFiles} component file(s) found. Preact (3KB) or vanilla JS would cut bundle size significantly.`, impact: 'medium', effort: 'medium' });
   }
 
-  if (sample.includes('commander') || sample.includes('Commander')) {
-    simplification.push({ strategy: 'Replace Commander.js with Citty or built-in parseArgs', description: 'Node.js 18+ has util.parseArgs built in. Citty is 0-dep. Removes a dependency.', impact: 'low', effort: 'low' });
-  }
-
-  if (depGraph.orphanFiles.length > 10) {
-    simplification.push({ strategy: `Remove ${depGraph.orphanFiles.length} potentially dead files`, description: 'These files are not imported anywhere. Removing them reduces cognitive overhead and bundle size.', impact: 'medium', effort: 'low' });
-  }
-
-  if (cq.largeFiles.length > 3) {
-    simplification.push({ strategy: `Split ${cq.largeFiles.length} oversized files`, description: `Files like ${cq.largeFiles[0]?.path ?? ''} (${cq.largeFiles[0]?.lines ?? 0} lines) should be broken into focused modules of < 200 lines.`, impact: 'medium', effort: 'medium' });
-  }
+  // ── Alternative Stack ───────────────────────────────────────────────
 
   if (primaryLang === 'TypeScript' || primaryLang === 'JavaScript') {
     if (perfMentions > 0 || hasBenchmarks) {
-      alternativeStack.push({ strategy: 'Evaluate Bun runtime compatibility', description: 'Performance signals were found (bench/perf mentions). Run benchmark parity tests before considering a Node.js runtime swap.', impact: 'medium', effort: 'medium' });
+      alternativeStack.push({ strategy: 'Evaluate Bun runtime compatibility', description: 'Performance signals were found. Run benchmark parity tests before considering a Node.js runtime swap.', impact: 'medium', effort: 'medium' });
     }
     if ((cq.totalCodeLines > 2000 && perfMentions > 0) || hasBenchmarks) {
-      alternativeStack.push({ strategy: 'Isolate hot paths into compiled service/module', description: 'Repo size and performance signals suggest a few hotspots may benefit from a compiled language path (for example Go/Rust) while keeping existing orchestration.', impact: 'high', effort: 'high' });
-    }
-    if (cq.totalCodeLines > 5000 && hasBenchmarks && perfMentions > 1) {
-      alternativeStack.push({ strategy: 'Rewrite performance-critical modules in Rust', description: 'Rust excels at file analysis at scale (see ripgrep). Consider hybrid: Rust for core analysis, TS for UI/orchestration.', impact: 'high', effort: 'high' });
+      alternativeStack.push({ strategy: 'Isolate hot paths into compiled service/module', description: 'Repo size and performance signals suggest a few hotspots may benefit from a compiled language path (Go/Rust) while keeping existing orchestration.', impact: 'high', effort: 'high' });
     }
   }
+
   if (primaryLang === 'Python') {
     const hasStrongPythonEvidence = hasNativeInterop || pythonHotspots.score >= 3 || (pythonHotspots.score >= 2 && (hasBenchmarks || perfMentions > 1));
     if (hasStrongPythonEvidence) {
       const reasonText = pythonHotspots.reasons.length > 0 ? ` Evidence: ${pythonHotspots.reasons.join('; ')}.` : '';
-      alternativeStack.push({ strategy: 'Evaluate native acceleration path for hotspots', description: `Python project shows concrete compute/performance signals. Consider PyO3/C extensions only for measured bottlenecks, not broad rewrites.${reasonText}`, impact: 'medium', effort: 'medium' });
+      alternativeStack.push({ strategy: 'Evaluate native acceleration path for hotspots', description: `Python project shows concrete compute/performance signals. Consider PyO3/C extensions only for measured bottlenecks.${reasonText}`, impact: 'medium', effort: 'medium' });
     }
     if (sample.includes('flask') || sample.includes('Flask')) {
-      alternativeStack.push({ strategy: 'Migrate Flask to FastAPI', description: 'FastAPI provides async support, automatic OpenAPI docs, and Pydantic validation. Similar routing API.', impact: 'medium', effort: 'medium' });
-    }
-  }
-  if (primaryLang === 'Go') {
-    if (cq.totalCodeLines > 3000 && (hasBenchmarks || perfMentions > 0)) {
-      alternativeStack.push({ strategy: 'Extract hot paths to Rust via CGO/FFI', description: 'For CPU-intensive tasks like parsing or crypto, Rust via CGO can provide 2-5x speedup over pure Go.', impact: 'medium', effort: 'high' });
-    }
-  }
-  if (primaryLang === 'Ruby') {
-    if (hasBenchmarks || perfMentions > 0) {
-      alternativeStack.push({ strategy: 'Consider Crystal or Go for performance-critical services', description: 'Crystal has Ruby-like syntax but compiles to native code. Go provides similar simplicity with better concurrency.', impact: 'high', effort: 'high' });
-    }
-  }
-  if (primaryLang === 'Java') {
-    if (hasBenchmarks || perfMentions > 0) {
-      alternativeStack.push({ strategy: 'Consider Kotlin or GraalVM native-image', description: 'Kotlin reduces boilerplate while remaining fully interop. GraalVM native-image eliminates JVM startup cost.', impact: 'medium', effort: 'medium' });
+      alternativeStack.push({ strategy: 'Migrate Flask to FastAPI', description: 'FastAPI provides async support, automatic OpenAPI docs, and Pydantic validation with similar routing API.', impact: 'medium', effort: 'medium' });
     }
   }
 
+  if (primaryLang === 'Go' && cq.totalCodeLines > 3000 && (hasBenchmarks || perfMentions > 0)) {
+    alternativeStack.push({ strategy: 'Extract hot paths to Rust via CGO/FFI', description: 'For CPU-intensive tasks like parsing or crypto, Rust via CGO can provide 2-5x speedup over pure Go.', impact: 'medium', effort: 'high' });
+  }
+
+  if (primaryLang === 'Ruby' && (hasBenchmarks || perfMentions > 0)) {
+    alternativeStack.push({ strategy: 'Consider Crystal or Go for performance-critical services', description: 'Crystal has Ruby-like syntax but compiles to native code. Go provides similar simplicity with better concurrency.', impact: 'high', effort: 'high' });
+  }
+
+  if (primaryLang === 'Java' && (hasBenchmarks || perfMentions > 0)) {
+    alternativeStack.push({ strategy: 'Consider Kotlin or GraalVM native-image', description: 'Kotlin reduces boilerplate while remaining fully interop. GraalVM native-image eliminates JVM startup cost.', impact: 'medium', effort: 'medium' });
+  }
+
+  // ── Performance ─────────────────────────────────────────────────────
+
+  // Sync fs calls
   if (sample.includes('readFileSync') || sample.includes('readdirSync')) {
     const syncCount = (sample.match(/readFileSync|readdirSync|writeFileSync|existsSync/g) ?? []).length;
-    performance.push({ strategy: 'Replace sync fs calls with async', description: `Found ~${syncCount} sync filesystem calls. Switch to fs.promises + worker_threads for parallel I/O. Critical for repos with 100+ files.`, impact: 'high', effort: 'medium' });
+    performance.push({ strategy: 'Replace sync fs calls with async', description: `Found ~${syncCount} sync filesystem calls. Switch to fs.promises for parallel I/O.`, impact: 'high', effort: 'medium' });
   }
 
+  // Long functions impeding optimization
   if (cq.totalFunctions > 100 && cq.avgFunctionLength > 25) {
-    performance.push({ strategy: 'Refactor long functions for JIT optimization', description: `${cq.totalFunctions} functions averaging ${cq.avgFunctionLength} lines. V8/Bun optimize short, monomorphic functions better.`, impact: 'medium', effort: 'medium' });
+    performance.push({ strategy: 'Refactor long functions', description: `${cq.totalFunctions} functions averaging ${cq.avgFunctionLength} lines. Shorter functions are easier to test, maintain, and optimize.`, impact: 'medium', effort: 'medium' });
   }
 
+  // Central module lazy-loading — with specific module
   if (depGraph.centralModules.length > 0 && (depGraph.centralModules[0]?.importedByCount ?? 0) > 10) {
     const central = depGraph.centralModules[0]!;
-    performance.push({ strategy: `Lazy-load ${central.file}`, description: `Imported by ${central.importedByCount} modules. Consider splitting or lazy-loading to reduce startup bundle.`, impact: 'medium', effort: 'low' });
+    performance.push({ strategy: `Lazy-load ${central.file}`, description: `Imported by ${central.importedByCount} modules. Lazy-loading or splitting this module reduces startup time and change blast radius.`, impact: 'medium', effort: 'low' });
   }
 
+  // React code splitting
   if (frameworks.includes('React') && totalReactFiles > 5) {
-    performance.push({ strategy: 'Add React code splitting', description: `${totalReactFiles} component files — use React.lazy + Suspense for route-level code splitting.`, impact: 'medium', effort: 'low' });
+    performance.push({ strategy: 'Add React code splitting', description: `${totalReactFiles} component files found. Use React.lazy + Suspense for route-level code splitting.`, impact: 'medium', effort: 'low' });
   }
 
-  if (filePaths.length > 30 || depGraph.internalImportCount > 100) {
-    performance.push({ strategy: 'Cache analysis results by fingerprint', description: 'Hash source fingerprints and skip re-analysis for unchanged sources. This is high impact in medium/large repositories.', impact: 'high', effort: 'low' });
+  // Pattern-specific performance suggestions
+  if (patterns.includes('REST API') && cq.totalCodeLines > 1000) {
+    const hasNoCache = !sample.includes('cache') && !sample.includes('Cache') && !sample.includes('redis') && !sample.includes('Redis');
+    if (hasNoCache) {
+      performance.push({ strategy: 'Add response caching to REST API', description: 'REST API pattern detected but no caching layer found. Consider Redis or in-memory caching for frequently accessed endpoints.', impact: 'high', effort: 'medium' });
+    }
+  }
+
+  if (patterns.includes('Event-Driven') && depGraph.internalImportCount > 200) {
+    performance.push({ strategy: 'Audit event handler performance', description: `Event-driven architecture with ${depGraph.internalImportCount} internal imports. Profile event handlers for blocking operations — async handlers prevent event loop starvation.`, impact: 'medium', effort: 'low' });
+  }
+
+  // Health-grade-based prioritization suggestions
+  if (grade === 'F' || grade === 'D') {
+    const highPriority = (improvements ?? []).filter((i) => i.priority === 'high');
+    if (highPriority.length > 0) {
+      const areas = [...new Set(highPriority.map((i) => i.area))].slice(0, 3).join(', ');
+      performance.push({
+        strategy: 'Prioritize foundational health improvements',
+        description: `Health grade ${grade} with ${highPriority.length} high-priority issue(s) in: ${areas}. Address these before pursuing performance optimizations — they compound maintenance cost.`,
+        impact: 'high',
+        effort: 'medium',
+      });
+    }
+  }
+
+  // Empty catch blocks — if many, suggest centralized error handling
+  if (cq.emptyCatchCount > 20) {
+    performance.push({
+      strategy: 'Centralize error handling',
+      description: `${cq.emptyCatchCount} suppressed exception handlers detected. Implement a centralized error handler or logging middleware to catch errors consistently instead of silently swallowing them.`,
+      impact: 'high',
+      effort: 'medium',
+    });
   }
 
   return { simplification, alternativeStack, performance };

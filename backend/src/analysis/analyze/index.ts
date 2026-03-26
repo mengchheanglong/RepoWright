@@ -182,6 +182,7 @@ function analyzeDirectory(source: Source, config: OperatorConfig): AnalysisRepor
     const lang = LANGUAGE_MAP[f.extension];
     if (lang) languageMap[lang] = (languageMap[lang] ?? 0) + 1;
   }
+
   const totalSize = files.reduce((sum, f) => sum + f.size, 0);
 
   const codeFiles = files.filter((f) => CODE_EXTENSIONS.has(f.extension));
@@ -203,17 +204,36 @@ function analyzeDirectory(source: Source, config: OperatorConfig): AnalysisRepor
   const tsconfigJson = readJsonSafe(path.join(source.location, 'tsconfig.json'));
   const pyprojectToml = readTextSafe(path.join(source.location, 'pyproject.toml'));
   const goMod = readTextSafe(path.join(source.location, 'go.mod'));
-  const cargoToml = readTextSafe(path.join(source.location, 'Cargo.toml'));
+  let cargoToml = readTextSafe(path.join(source.location, 'Cargo.toml'));
   const gemfile = readTextSafe(path.join(source.location, 'Gemfile'));
   const requirementsTxt = readTextSafe(path.join(source.location, 'requirements.txt'))
     ?? readTextSafe(path.join(source.location, 'requirements-dev.txt'));
   const setupPy = readTextSafe(path.join(source.location, 'setup.py'));
 
+  // If root Cargo.toml is a workspace without [dependencies], merge nested Cargo.toml files
+  if (cargoToml && /\[workspace\]/.test(cargoToml) && !/\[dependencies\]/.test(cargoToml)) {
+    const nestedCargoFiles = files.filter((f) =>
+      f.path.endsWith('Cargo.toml') && f.path !== 'Cargo.toml' && !f.path.includes('target/'),
+    );
+    for (const f of nestedCargoFiles) {
+      const nested = readTextSafe(path.join(source.location, f.path));
+      if (nested) cargoToml += '\n' + nested;
+    }
+  }
+
   const nestedPkgs: Record<string, unknown>[] = [];
+  // Only collect nested package.json from production-scoped paths (not examples/docs)
+  const productionNestedPkgs: Record<string, unknown>[] = [];
   for (const f of files) {
     if (f.path.endsWith('package.json') && f.path !== 'package.json' && !f.path.includes('node_modules')) {
       const nested = readJsonSafe(path.join(source.location, f.path));
-      if (nested) nestedPkgs.push(nested);
+      if (nested) {
+        nestedPkgs.push(nested);
+        const scope = classifyPathScope(f.path);
+        if (scope === 'production' || scope === 'test') {
+          productionNestedPkgs.push(nested);
+        }
+      }
     }
   }
 
@@ -233,7 +253,17 @@ function analyzeDirectory(source: Source, config: OperatorConfig): AnalysisRepor
   const hasTests = files.some((f) => f.path.includes('test') || f.path.includes('spec') || f.path.includes('__tests__'));
   const hasSrc = files.some((f) => f.path.startsWith('src/') || f.path.startsWith('src\\'));
 
-  const frameworks = detectFrameworks(filePaths, packageJson, nestedPkgs, pyprojectToml, goMod, cargoToml, gemfile, requirementsTxt, setupPy);
+  // Detect languages from config files even if all source files are in vendor scope
+  const hasGoMod = goMod || files.some((f) => f.path.endsWith('go.mod'));
+  if (hasGoMod && !languages.includes('Go')) {
+    languages.push('Go');
+    const goFileCount = files.filter((f) => f.extension === '.go').length;
+    if (goFileCount > 0) languageMap['Go'] = goFileCount;
+  }
+
+  // Use production-scoped nested packages for framework detection to avoid
+  // counting frameworks only used in examples/docs as primary project frameworks
+  const frameworks = detectFrameworks(filePaths, packageJson, productionNestedPkgs, pyprojectToml, goMod, cargoToml, gemfile, requirementsTxt, setupPy);
   const patterns = detectPatterns(productionPaths, productionFileContents);
   const techStack = buildTechStack(languages, frameworks, packageJson, filePaths);
 
@@ -295,7 +325,11 @@ function analyzeDirectory(source: Source, config: OperatorConfig): AnalysisRepor
   if (techStack.includes('Node.js')) insights.push('Node.js runtime detected');
   if (frameworks.length > 0) insights.push(`Frameworks: ${frameworks.join(', ')}`);
   if (patterns.length > 0) insights.push(`Patterns: ${patterns.join(', ')}`);
-  insights.push(`${codeQuality.totalFunctions} functions across ${codeQuality.totalCodeLines} code lines`);
+  if (codeQuality.totalAllScopeCodeLines && codeQuality.totalAllScopeCodeLines > codeQuality.totalCodeLines) {
+    insights.push(`${codeQuality.totalFunctions} functions across ${codeQuality.totalCodeLines} production code lines (${codeQuality.totalAllScopeCodeLines} total including vendor/test/docs)`);
+  } else {
+    insights.push(`${codeQuality.totalFunctions} functions across ${codeQuality.totalCodeLines} code lines`);
+  }
   if (codeQuality.commentRatio > 0) insights.push(`Comment ratio: ${(codeQuality.commentRatio * 100).toFixed(1)}%`);
   if (depGraph.circularDeps.length > 0) insights.push(`${depGraph.circularDeps.length} circular dependency chain(s) detected`);
   if (depGraph.centralModules.length > 0) insights.push(`Most imported: ${depGraph.centralModules[0]?.file ?? ''} (${depGraph.centralModules[0]?.importedByCount ?? 0} dependents)`);
@@ -354,7 +388,7 @@ function buildDeepAnalysis(
   configAnalysis: ConfigAnalysis,
 ): DeepAnalysis {
   const improvements = detectImprovements(filePaths, fileContents, hasTests, frameworks, patterns, fileCount, codeQuality, depGraph, configAnalysis);
-  const security = scanSecurity(fileContents, filePaths);
+  const security = scanSecurity(fileContents, filePaths, allFilePaths);
   const healthScore = computeHealthScore({
     fileList: filePaths,
     allFileList: allFilePaths,
@@ -382,7 +416,7 @@ function buildDeepAnalysis(
     usefulComponents: detectUsefulComponents(filePaths, fileContents, frameworks, depGraph),
     improvements,
     uniqueness: detectUniqueness(filePaths, fileContents, frameworks, patterns, languages, codeQuality, depGraph),
-    optimizations: generateOptimizations(languages, frameworks, filePaths, fileContents, fileCount, codeQuality, depGraph),
+    optimizations: generateOptimizations(languages, frameworks, patterns, filePaths, fileContents, fileCount, codeQuality, depGraph, improvements, healthScore),
     security,
     healthScore,
   };
@@ -403,8 +437,23 @@ function buildCoreSummary(
     entries.sort((a, b) => b[1] - a[1]);
     return entries[0]?.[0] ?? languages[0] ?? 'Unknown';
   })();
-  const fwStr = frameworks.length > 0 ? ` built with ${frameworks.slice(0, 3).join(', ')}` : '';
-  return `A ${primaryLang}-based project${fwStr} containing ${fileCount} files (${fmtSize(totalSize)}), ${cq.totalFunctions} functions across ${cq.totalCodeLines} lines of code. Comment coverage: ${(cq.commentRatio * 100).toFixed(1)}%. Source: "${source.name}".`;
+  // Prioritize major frameworks (web frameworks, infra) over auxiliary libraries in the summary
+  const majorFrameworks = ['Docker', 'FastAPI', 'Django', 'Flask', 'Express', 'Next.js', 'React', 'Vue', 'Angular',
+    'NestJS', 'Spring Boot', 'Rails', 'Gin', 'Actix', 'Axum', 'Rocket', 'Hono', 'Fastify',
+    'Pydantic', 'SQLAlchemy', 'Prisma', 'TypeORM', 'Gradio', 'Streamlit'];
+  const sortedFw = [...frameworks].sort((a, b) => {
+    const ai = majorFrameworks.indexOf(a);
+    const bi = majorFrameworks.indexOf(b);
+    if (ai >= 0 && bi < 0) return -1;
+    if (ai < 0 && bi >= 0) return 1;
+    if (ai >= 0 && bi >= 0) return ai - bi;
+    return a.localeCompare(b);
+  });
+  const fwStr = sortedFw.length > 0 ? ` built with ${sortedFw.slice(0, 3).join(', ')}` : '';
+  const locStr = cq.totalAllScopeCodeLines && cq.totalAllScopeCodeLines > cq.totalCodeLines
+    ? `${cq.totalCodeLines} production lines of code (${cq.totalAllScopeCodeLines} total)`
+    : `${cq.totalCodeLines} lines of code`;
+  return `A ${primaryLang}-based project${fwStr} containing ${fileCount} files (${fmtSize(totalSize)}), ${cq.totalFunctions} functions across ${locStr}. Comment coverage: ${(cq.commentRatio * 100).toFixed(1)}%. Source: "${source.name}".`;
 }
 
 function calculateAnalysisConfidence(
@@ -478,9 +527,16 @@ function detectEntryPoints(
   for (const [fp, content] of fileContents) {
     if (entries.length >= 10) break;
     // Skip test files as entry points — they're test runners, not real entry points
-    if (/(?:^|\/)(?:tests?\/|test_|spec_|__tests__\/)/i.test(fp)) continue;
+    if (/(?:^|[\\/])(?:tests?[\\/]|test_|spec_|__tests__[\\/])/i.test(fp)) continue;
     if (content.includes('.listen(') && !entries.some((e) => e.includes(fp))) entries.push(`HTTP server: ${fp}`);
     if ((content.includes('program.parse') || content.includes('.command(')) && !entries.some((e) => e.includes(fp))) entries.push(`CLI entry: ${fp}`);
+    // Python entry points
+    const ext = path.extname(fp).toLowerCase();
+    if (ext === '.py') {
+      if (/create_app\s*\(|FastAPI\s*\(/.test(content) && /uvicorn|\.run\(/.test(content) && !entries.some((e) => e.includes(fp))) entries.push(`HTTP server: ${fp}`);
+      if (/typer\.Typer\s*\(|@?app\.command\s*\(/i.test(content) && !entries.some((e) => e.includes(fp))) entries.push(`CLI entry: ${fp}`);
+      if (/if\s+__name__\s*==\s*['"]__main__['"]/i.test(content) && !entries.some((e) => e.includes(fp))) entries.push(`Script entry: ${fp}`);
+    }
   }
 
   return [...new Set(entries)].slice(0, 10);

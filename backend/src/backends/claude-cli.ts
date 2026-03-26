@@ -7,6 +7,7 @@ import type { BackendAdapter, ExecutionResult } from './adapter.js';
 import { isCliAvailable } from './cli-detect.js';
 import { detectChangedFiles } from './file-detect.js';
 import { buildTaskPrompt } from './prompt-builder.js';
+import { GENERATED_PROMPT_FILENAME, promptFileExcludes } from './prompt-file.js';
 
 /**
  * Claude CLI backend adapter.
@@ -47,21 +48,19 @@ export class ClaudeCliBackend implements BackendAdapter {
     }
 
     const prompt = buildTaskPrompt(task, source, analysis);
-    const promptFile = path.join(workspacePath, '.operator-prompt.md');
+    const promptFile = path.join(workspacePath, GENERATED_PROMPT_FILENAME);
     fs.writeFileSync(promptFile, prompt);
 
     logger.info(`[claude-cli] Executing: ${task.title}`);
     logger.info(`[claude-cli] Workspace: ${workspacePath}`);
 
     try {
-      // Use --print for non-interactive single-shot execution
-      // Use --dangerously-skip-permissions to allow file writes in workspace
       const result = execSync(
         `claude --print --dangerously-skip-permissions "${prompt.replace(/"/g, '\\"')}"`,
         {
           cwd: workspacePath,
           encoding: 'utf-8',
-          timeout: 300000, // 5 minutes
+          timeout: 300000,
           stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env },
         },
@@ -74,12 +73,11 @@ export class ClaudeCliBackend implements BackendAdapter {
       fs.writeFileSync(path.join(workspacePath, outputFile), `# Claude Output\n\n${output}\n`);
 
       const artifacts: ExecutionResult['artifacts'] = [
-        { type: 'prompt', filename: '.operator-prompt.md', content: prompt },
+        { type: 'prompt', filename: GENERATED_PROMPT_FILENAME, content: prompt },
         { type: 'claude-output', filename: outputFile, content: output },
       ];
 
-      // Detect any new/modified files in workspace
-      const changedFiles = detectChangedFiles(workspacePath, ['.operator-prompt.md', outputFile]);
+      const changedFiles = detectChangedFiles(workspacePath, promptFileExcludes([outputFile]));
       if (changedFiles.length > 0) {
         const manifest = changedFiles.map((f) => `- ${f}`).join('\n');
         const manifestFile = 'changed-files.md';
@@ -98,7 +96,7 @@ export class ClaudeCliBackend implements BackendAdapter {
       return {
         success: false,
         output: '',
-        artifacts: [{ type: 'prompt', filename: '.operator-prompt.md', content: prompt }],
+        artifacts: [{ type: 'prompt', filename: GENERATED_PROMPT_FILENAME, content: prompt }],
         error: `Claude CLI failed: ${message}`,
       };
     }

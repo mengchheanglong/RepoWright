@@ -859,7 +859,7 @@ export default function App() {
   return (
     <main className="shell">
       <section className="hero card">
-        <p className="label">SourceLens</p>
+        <p className="label">RepoWright</p>
         <h1>Deep source analysis</h1>
         <p className="subtext">
           Ingest a codebase and get a detailed breakdown: core system, components, improvements, security scanning, health scoring, and optimization strategies.

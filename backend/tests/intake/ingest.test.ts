@@ -23,7 +23,7 @@ describe('detectSourceType', () => {
 });
 
 describe('ingestSource', () => {
-  const config = loadConfig({ dataDir: path.join(os.tmpdir(), `operator-test-${Date.now()}`) });
+  const config = loadConfig({ dataDir: path.join(os.tmpdir(), `repowright-test-${Date.now()}`) });
 
   it('ingests a text brief', () => {
     const source = ingestSource('Build a rate limiter for Node.js', config);

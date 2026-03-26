@@ -57,7 +57,7 @@ describe('executeTask', () => {
   beforeEach(() => {
     const db = createInMemoryDatabase();
     repo = new Repository(db);
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'operator-test-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repowright-test-'));
     config = loadConfig({
       dataDir: tmpDir,
       runsDir: path.join(tmpDir, 'runs'),

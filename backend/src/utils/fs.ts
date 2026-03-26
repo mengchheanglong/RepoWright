@@ -46,7 +46,7 @@ interface FileEntry {
 }
 
 function isSkippable(name: string): boolean {
-  return name.startsWith('.') || name === 'node_modules';
+  return name.startsWith('.') || name === 'node_modules' || name === '__pycache__' || name === '.mypy_cache';
 }
 
 function readDirSafe(dir: string): fs.Dirent[] {

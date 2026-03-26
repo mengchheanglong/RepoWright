@@ -67,11 +67,28 @@ export function analyzeConfigs(
         else if (bs.includes('maturin')) buildSystem = 'maturin';
       }
 
-      const depMatch = pyprojectToml.match(/\[(?:project\.)?dependencies\]\s*\n([\s\S]*?)(?:\n\[|\n\n|$)/);
-      if (depMatch?.[1]) {
-        for (const line of depMatch[1].split('\n')) {
+      // Match dependencies as a TOML table: [project.dependencies] or [dependencies]
+      const depTableMatch = pyprojectToml.match(/\[(?:project\.)?dependencies\]\s*\n([\s\S]*?)(?:\n\[|\n\n|$)/);
+      if (depTableMatch?.[1]) {
+        for (const line of depTableMatch[1].split('\n')) {
           const pkg = line.match(/^\s*["']?([\w-]+)/);
           if (pkg?.[1]) packages.push(pkg[1]);
+        }
+      }
+      // Also match dependencies as an inline array: dependencies = ["pkg>=1.0", ...]
+      const depArrayMatch = pyprojectToml.match(/^dependencies\s*=\s*\[([\s\S]*?)\]/m);
+      if (depArrayMatch?.[1]) {
+        for (const m of depArrayMatch[1].matchAll(/["']([\w][\w-]*)/g)) {
+          if (m[1]) packages.push(m[1]);
+        }
+      }
+      // Also check optional-dependencies sections
+      for (const m of pyprojectToml.matchAll(/\[project\.optional-dependencies\.\w+\]\s*\n([\s\S]*?)(?:\n\[|\n\n|$)/g)) {
+        if (m[1]) {
+          for (const line of m[1].split('\n')) {
+            const pkg = line.match(/^\s*["']?([\w-]+)/);
+            if (pkg?.[1] && !packages.includes(pkg[1])) packages.push(pkg[1]);
+          }
         }
       }
 
@@ -116,8 +133,17 @@ export function analyzeConfigs(
     const nameMatch = cargoToml.match(/name\s*=\s*"([^"]+)"/);
     const name = nameMatch?.[1];
 
-    const depSection = cargoToml.match(/\[dependencies\]([\s\S]*?)(?:\n\[|$)/);
-    const depLines = depSection?.[1]?.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).length ?? 0;
+    // Count dependencies from [dependencies], [dev-dependencies], and [build-dependencies]
+    let depLines = 0;
+    for (const section of ['dependencies', 'dev-dependencies', 'build-dependencies']) {
+      const depSection = cargoToml.match(new RegExp(`\\[${section}\\]([\\s\\S]*?)(?:\\n\\[|$)`));
+      depLines += depSection?.[1]?.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#') && l.includes('=')).length ?? 0;
+    }
+    // Also count inline table dependencies like `pkg = { version = "..." }`
+    // and simple `pkg = "version"` entries
+    // For workspace Cargo.toml, check [workspace.dependencies] too
+    const workspaceDepSection = cargoToml.match(/\[workspace\.dependencies\]([\s\S]*?)(?:\n\[|$)/);
+    depLines += workspaceDepSection?.[1]?.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#') && l.includes('=')).length ?? 0;
 
     if (edition && Number.parseInt(edition, 10) < 2021) {
       issues.push(`Rust edition ${edition} — consider upgrading to 2021 or 2024 for latest features`);

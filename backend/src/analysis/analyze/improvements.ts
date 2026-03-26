@@ -25,17 +25,21 @@ export function detectImprovements(
   const coverageRatio = actionableCodeFiles.length / Math.max(filePaths.filter((f) => CODE_EXTENSIONS.has(path.extname(f))).length, 1);
 
   if (!hasTests) {
-    items.push({ area: 'Testing', issue: 'No test files detected', suggestion: 'Add unit and integration tests for core business logic', priority: 'high' });
+    const startWith = depGraph.centralModules.length > 0
+      ? ` Start with ${depGraph.centralModules[0]!.file} (imported by ${depGraph.centralModules[0]!.importedByCount} modules).`
+      : '';
+    items.push({ area: 'Testing', issue: 'No test files detected', suggestion: `Add unit and integration tests for core business logic.${startWith}`, priority: 'high' });
   } else {
     const testFiles = filePaths.filter((f) => classifyPathScope(f) === 'test');
     const ratio = testFiles.length / Math.max(actionableCodeFiles.length, 1);
     if (ratio < 0.1) {
+      const untested = depGraph.centralModules.slice(0, 3).map((m) => `${m.file} (${m.importedByCount} dependents)`);
       items.push({
         area: 'Testing',
         issue: `Low test-to-production ratio: ${testFiles.length} test files for ${actionableCodeFiles.length} production code files (${(ratio * 100).toFixed(0)}%)`,
-        suggestion: 'Prioritize tests for production modules with highest import count. Confidence: high (path-scoped; production-only denominator).',
+        suggestion: `Prioritize tests for the most-imported modules — changes there have the highest blast radius.`,
         priority: 'high',
-        files: depGraph.centralModules.slice(0, 3).map((m) => m.file),
+        files: untested,
       });
     }
   }
@@ -113,12 +117,18 @@ export function detectImprovements(
     items.push({ area: 'Documentation', issue: `Comment ratio is only ${(cq.commentRatio * 100).toFixed(1)}% across ${cq.totalCodeLines} lines of code`, suggestion: 'Add JSDoc comments to exported functions and complex logic. Focus on the why, not the what.', priority: 'low' });
   }
 
+  const corsFiles: string[] = [];
   for (const [fp, content] of fileContents) {
     if (!isActionableCodePath(fp)) continue;
-    if ((/Access-Control-Allow-Origin/i.test(content) && /\*/.test(content)) || /cors\s*\([^)]*origin\s*:\s*['"]\*['"]/i.test(content)) {
-      items.push({ area: 'Security', issue: 'CORS allows all origins (*)', suggestion: 'Restrict to specific trusted origins in production. Confidence: medium (string-match heuristic).', priority: 'medium', files: [fp] });
-      break;
+    const hasJsCors = (/Access-Control-Allow-Origin/i.test(content) && /\*/.test(content)) || /cors\s*\([^)]*origin\s*:\s*['"]\*['"]/i.test(content);
+    // Python/FastAPI: cors_origins = ["*"], allow_origins=["*"], CORSMiddleware with allow_origins=["*"]
+    const hasPyCors = /cors_origins.*\["?\*"?\]|allow_origins.*\["?\*"?\]|CORSMiddleware.*allow_origins.*\*/i.test(content);
+    if (hasJsCors || hasPyCors) {
+      corsFiles.push(fp);
     }
+  }
+  if (corsFiles.length > 0) {
+    items.push({ area: 'Security', issue: 'CORS allows all origins (*)', suggestion: 'Restrict to specific trusted origins in production. Confidence: medium (string-match heuristic).', priority: 'medium', files: corsFiles.slice(0, 5) });
   }
 
   // README check is done via allFilePaths passed separately since README is docs-scoped

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { isGeneratedPromptFile } from './prompt-file.js';
 
 interface WalkEntry {
   dir: string;
@@ -7,7 +8,7 @@ interface WalkEntry {
 }
 
 function shouldSkipEntry(name: string): boolean {
-  return name.startsWith('.') && name !== '.operator-prompt.md';
+  return name.startsWith('.') && !isGeneratedPromptFile(name);
 }
 
 function readDirSafe(dir: string): fs.Dirent[] {

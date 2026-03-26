@@ -13,15 +13,15 @@ export function initWorkspaceGit(workspacePath: string): boolean {
   try {
     execSync('git init', { cwd: workspacePath, stdio: 'pipe' });
     execSync('git add -A', { cwd: workspacePath, stdio: 'pipe' });
-    execSync('git commit -m "operator: initial workspace state" --allow-empty', {
+    execSync('git commit -m "repowright: initial workspace state" --allow-empty', {
       cwd: workspacePath,
       stdio: 'pipe',
       env: {
         ...process.env,
-        GIT_AUTHOR_NAME: 'operator',
-        GIT_AUTHOR_EMAIL: 'operator@local',
-        GIT_COMMITTER_NAME: 'operator',
-        GIT_COMMITTER_EMAIL: 'operator@local',
+        GIT_AUTHOR_NAME: 'repowright',
+        GIT_AUTHOR_EMAIL: 'repowright@local',
+        GIT_COMMITTER_NAME: 'repowright',
+        GIT_COMMITTER_EMAIL: 'repowright@local',
       },
     });
     logger.debug(`Git tracking initialized in ${workspacePath}`);

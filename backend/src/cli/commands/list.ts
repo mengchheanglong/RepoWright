@@ -9,7 +9,7 @@ export async function handleList(): Promise<void> {
 
   if (sources.length === 0 && runs.length === 0) {
     console.log(
-      chalk.dim('No sources or runs yet. Use "operator ingest <source>" to get started.'),
+      chalk.dim('No sources or runs yet. Use "repowright ingest <source>" to get started.'),
     );
     return;
   }

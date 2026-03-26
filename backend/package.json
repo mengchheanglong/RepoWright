@@ -1,10 +1,10 @@
 {
-  "name": "operator-backend",
+  "name": "repowright-backend",
   "version": "0.1.0",
-  "description": "Personal AI Engineering Operator backend (CLI + API)",
+  "description": "RepoWright backend (CLI + API)",
   "type": "module",
   "bin": {
-    "operator": "./dist/cli/index.js"
+    "repowright": "./dist/cli/index.js"
   },
   "scripts": {
     "build": "tsc",

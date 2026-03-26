@@ -8,24 +8,47 @@ export function buildDependencyGraph(fileContents: Map<string, string>, _sourceR
     nodes.set(fp, { imports: new Set(), importedBy: new Set() });
   }
 
-  let externalDepCount = 0;
+  // Build a set of known top-level Python packages from the file tree
+  // e.g., if we have "openviking/utils/foo.py", then "openviking" is a known package
+  const knownPyPackages = new Set<string>();
+  for (const fp of fileContents.keys()) {
+    if (fp.endsWith('.py')) {
+      const parts = fp.replace(/\\/g, '/').split('/');
+      if (parts.length >= 2) knownPyPackages.add(parts[0]!);
+    }
+  }
+
+  const externalPackages = new Set<string>();
   let internalImportCount = 0;
 
   for (const [fp, content] of fileContents) {
     const importPaths = extractImportPaths(content, fp);
     for (const raw of importPaths) {
-      if (isRelativeOrInternalImport(raw, fp)) {
-        const resolved = resolveRelativeImport(fp, raw, fileContents);
+      if (isRelativeOrInternalImport(raw, fp, knownPyPackages)) {
+        const resolved = resolveRelativeImport(fp, raw, fileContents, knownPyPackages);
         if (resolved && nodes.has(resolved)) {
           nodes.get(fp)!.imports.add(resolved);
           nodes.get(resolved)!.importedBy.add(fp);
           internalImportCount++;
         }
       } else {
-        externalDepCount++;
+        // Track unique external package names (top-level package only)
+        const ext = path.extname(fp).toLowerCase();
+        let pkgName = raw;
+        if (ext === '.py') {
+          pkgName = raw.split('.')[0] ?? raw;
+        } else if (raw.startsWith('@')) {
+          // Scoped npm packages: @scope/pkg
+          pkgName = raw.split('/').slice(0, 2).join('/');
+        } else {
+          pkgName = raw.split('/')[0] ?? raw;
+        }
+        externalPackages.add(pkgName);
       }
     }
   }
+
+  const externalDepCount = externalPackages.size;
 
   const centralModules = [...nodes.entries()]
     .map(([file, n]) => ({ file, importedByCount: n.importedBy.size }))
@@ -35,7 +58,7 @@ export function buildDependencyGraph(fileContents: Map<string, string>, _sourceR
 
   const entryLike = /index\.|main\.|app\.|server\.|cli/i;
   // Test files, conftest, setup scripts, benchmarks, and __init__.py are expected entry points
-  const knownEntryOrRunner = /(?:^|\/)(?:test_|spec_|tests?\/|__tests__\/|conftest\.py|setup\.py|manage\.py|__init__\.py|benchmark|__main__\.py)/i;
+  const knownEntryOrRunner = /(?:^|[\\/])(?:test_|spec_|tests?[\\/]|__tests__[\\/]|conftest\.py|setup\.py|manage\.py|__init__\.py|benchmark|__main__\.py)/i;
   const orphanFiles = [...nodes.entries()]
     .filter(([file, n]) => n.importedBy.size === 0 && !entryLike.test(file) && !knownEntryOrRunner.test(file))
     .map(([file]) => file)
@@ -106,7 +129,7 @@ function extractImportPaths(content: string, filePath?: string): string[] {
     }
   }
 
-  if (ext === '.c' || ext === '.cpp' || ext === '.h' || ext === '.hpp') {
+  if (ext === '.c' || ext === '.cpp' || ext === '.cc' || ext === '.cxx' || ext === '.h' || ext === '.hpp') {
     for (const m of content.matchAll(/^\s*#include\s+["<]([^">]+)[">]/gm)) {
       if (m[1]) paths.push(m[1]);
     }
@@ -121,25 +144,40 @@ function extractImportPaths(content: string, filePath?: string): string[] {
   return paths;
 }
 
-function isRelativeOrInternalImport(p: string, filePath?: string): boolean {
+function isRelativeOrInternalImport(p: string, filePath?: string, knownPyPackages?: Set<string>): boolean {
   if (p.startsWith('./') || p.startsWith('../')) return true;
   const ext = filePath ? path.extname(filePath).toLowerCase() : '';
   if (ext === '.py' && p.startsWith('.')) return true;
+  // Python absolute imports: check if the top-level package matches a known project package
+  if (ext === '.py' && knownPyPackages && knownPyPackages.size > 0) {
+    const topLevel = p.split('.')[0] ?? '';
+    if (topLevel && knownPyPackages.has(topLevel)) return true;
+  }
   if (ext === '.rb') return true;
-  if ((ext === '.c' || ext === '.cpp' || ext === '.h') && !p.includes('/')) return true;
+  if ((ext === '.c' || ext === '.cpp' || ext === '.cc' || ext === '.cxx' || ext === '.h' || ext === '.hpp') && !p.includes('/')) return true;
   return false;
 }
 
-function resolveRelativeImport(fromFile: string, importPath: string, knownFiles: Map<string, string>): string | null {
+function resolveRelativeImport(fromFile: string, importPath: string, knownFiles: Map<string, string>, knownPyPackages?: Set<string>): string | null {
   const dir = path.dirname(fromFile);
   const ext = path.extname(fromFile).toLowerCase();
 
   let normalizedPath = importPath;
   if (ext === '.py' && /^[\w.]+$/.test(importPath)) {
-    normalizedPath = './' + importPath.replace(/\./g, '/');
+    // Check if this is an absolute import matching a known project package
+    const topLevel = importPath.split('.')[0] ?? '';
+    if (knownPyPackages && knownPyPackages.has(topLevel)) {
+      // Absolute import: convert dots to path separators from project root
+      normalizedPath = importPath.replace(/\./g, '/');
+    } else {
+      // Relative import within the same directory
+      normalizedPath = './' + importPath.replace(/\./g, '/');
+    }
   }
 
-  const base = path.join(dir, normalizedPath).replace(/\\/g, '/');
+  const base = ext === '.py' && knownPyPackages && knownPyPackages.has((importPath.split('.')[0] ?? ''))
+    ? normalizedPath.replace(/\\/g, '/')
+    : path.join(dir, normalizedPath).replace(/\\/g, '/');
   const candidates: string[] = [base];
 
   if (ext === '.py') {
@@ -152,8 +190,8 @@ function resolveRelativeImport(fromFile: string, importPath: string, knownFiles:
     candidates.push(`${base}.rb`);
   } else if (ext === '.java' || ext === '.kt') {
     candidates.push(`${base}.java`, `${base}.kt`);
-  } else if (ext === '.c' || ext === '.cpp' || ext === '.h') {
-    candidates.push(`${base}.h`, `${base}.hpp`, `${base}.c`, `${base}.cpp`);
+  } else if (ext === '.c' || ext === '.cpp' || ext === '.cc' || ext === '.cxx' || ext === '.h' || ext === '.hpp') {
+    candidates.push(`${base}.h`, `${base}.hpp`, `${base}.c`, `${base}.cpp`, `${base}.cc`, `${base}.cxx`);
   } else {
     candidates.push(
       `${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.jsx`, `${base}.mjs`,

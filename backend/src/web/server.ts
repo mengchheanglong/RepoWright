@@ -16,7 +16,9 @@ import { initLogger } from '../utils/logger.js';
 type BackendOption = 'internal-planner' | 'codex-cli' | 'claude-cli';
 
 const app = express();
-const port = Number(process.env.OPERATOR_API_PORT ?? 8787);
+const port = Number(
+  process.env.REPOWRIGHT_API_PORT ?? process.env.SOURCELENS_API_PORT ?? process.env.OPERATOR_API_PORT ?? 8787,
+);
 
 const config = loadConfig();
 initLogger(config.logLevel);
@@ -291,7 +293,7 @@ app.get('/api/memory', (req: Request, res: Response) => {
 
 const server = app.listen(port, () => {
   // Keep this plain for easy discovery in terminal output.
-  console.log(`Operator API running at http://localhost:${port}`);
+  console.log(`RepoWright API running at http://localhost:${port}`);
 });
 
 function handleError(error: unknown, res: Response): Response {

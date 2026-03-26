@@ -130,13 +130,13 @@ const VULN_PATTERNS: VulnPattern[] = [
     confidence: 'medium',
     description: 'File operation uses user-supplied input without sanitisation, risking path traversal.',
   },
-  // Insecure HTTP (non-localhost, non-internal)
+  // Insecure HTTP (non-localhost, non-internal, non-example)
   {
     name: 'Insecure HTTP',
-    regex: /['"]http:\/\/(?!localhost|127\.0\.0\.1|0\.0\.0\.0|::1|10\.\d|172\.\d|192\.168\.|host\.docker\.internal)[^'"]+['"]/,
-    severity: 'low',
+    regex: /['"]http:\/\/(?!localhost|127\.0\.0\.1|0\.0\.0\.0|::1|10\.\d|172\.\d|192\.168\.|host\.docker\.internal|example\.com|schema\.org|www\.w3\.org)[^'"]+['"]/,
+    severity: 'medium',
     confidence: 'low',
-    description: 'HTTP used instead of HTTPS. May be acceptable for internal services or local development defaults.',
+    description: 'HTTP used instead of HTTPS for a non-localhost URL.',
   },
   // Disabled SSL verification
   {
@@ -170,9 +170,10 @@ const VULN_PATTERNS: VulnPattern[] = [
     description: 'yaml.load without SafeLoader can execute arbitrary code.',
   },
   // innerHTML / dangerouslySetInnerHTML with dynamic content
+  // Exclude clearing (innerHTML = "" or '') and static HTML assignments
   {
     name: 'Unsafe innerHTML',
-    regex: /\.innerHTML\s*=\s*(?!['"]<)/,
+    regex: /\.innerHTML\s*=\s*(?!['"](?:<|['"])\s*[;,\n]|['"]{2})/,
     severity: 'medium',
     confidence: 'medium',
     description: 'Setting innerHTML with dynamic content risks cross-site scripting (XSS).',
@@ -197,6 +198,7 @@ const LOCK_FILES = new Set([
   'bun.lockb',
   'Pipfile.lock',
   'poetry.lock',
+  'uv.lock',
   'Cargo.lock',
   'Gemfile.lock',
   'go.sum',
@@ -360,6 +362,21 @@ function scanMisconfigurations(files: Map<string, string>, fileList: string[]): 
       });
     }
 
+    // CORS wildcard detection for Python/FastAPI (Pydantic Field default with ["*"])
+    if (/cors_origins.*\["?\*"?\]|allow_origins.*\["?\*"?\]|CORSMiddleware.*allow_origins.*\*/i.test(content)) {
+      const corsMatch = /cors_origins.*\["?\*"?\]|allow_origins.*\["?\*"?\]/i.exec(content);
+      findings.push({
+        type: 'misconfiguration',
+        severity: 'medium',
+        title: 'CORS Wildcard Origin',
+        description: 'CORS is configured to allow all origins (*). Restrict to specific trusted origins in production.',
+        filePath: fp,
+        line: corsMatch ? getLineNumber(content, corsMatch.index) : 1,
+        pattern: 'cors_origins: ["*"]',
+        confidence: 'medium',
+      });
+    }
+
     // Helmet / security headers missing check (Express)
     if (/express\(\)/.test(content) && !/helmet/i.test(content) && /app\.(use|get|post|listen)/.test(content)) {
       findings.push({
@@ -392,7 +409,7 @@ function scanMisconfigurations(files: Map<string, string>, fileList: string[]): 
 
   // Check for .env files committed (present in file list)
   for (const fp of fileList) {
-    const base = fp.split('/').pop() ?? '';
+    const base = fp.split(/[\\/]/).pop() ?? '';
     if (/^\.env(?:\.(?:production|staging|local))?$/.test(base) && !base.includes('example')) {
       findings.push({
         type: 'misconfiguration',
@@ -452,18 +469,21 @@ function computeScore(
 // Main export
 // ---------------------------------------------------------------------------
 
-export function scanSecurity(files: Map<string, string>, fileList: string[]): SecurityReport {
+export function scanSecurity(files: Map<string, string>, fileList: string[], allFileList?: string[]): SecurityReport {
   const secretFindings = scanSecrets(files);
   const vulnFindings = scanVulnerabilities(files);
   const miscFindings = scanMisconfigurations(files, fileList);
   const findings = [...secretFindings, ...vulnFindings, ...miscFindings];
 
-  const lowerList = fileList.map((f) => f.toLowerCase());
+  // Use allFileList for project-level checks (SECURITY.md, lock files) since these
+  // can exist in any scope (docs, root, .github/) — not just production code
+  const policyCheckList = allFileList ?? fileList;
+  const lowerList = policyCheckList.map((f) => f.toLowerCase());
   const hasSecurityPolicy = lowerList.some(
-    (f) => f === 'security.md' || f.endsWith('/security.md') || f === '.github/security.md',
+    (f) => f === 'security.md' || f.endsWith('/security.md') || f.endsWith('\\security.md') || f === '.github/security.md' || f === '.github\\security.md',
   );
-  const hasLockFile = fileList.some((f) => {
-    const base = f.split('/').pop() ?? '';
+  const hasLockFile = policyCheckList.some((f) => {
+    const base = f.split(/[\\/]/).pop() ?? '';
     return LOCK_FILES.has(base);
   });
 

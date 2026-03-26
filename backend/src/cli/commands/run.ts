@@ -20,7 +20,7 @@ export async function handleRun(taskId: string, options?: RunOptions): Promise<v
 
   const analysis = repo.getAnalysisBySource(task.sourceId);
   if (!analysis) {
-    console.log(chalk.red('No analysis found for this source. Run "operator analyze" first.'));
+    console.log(chalk.red('No analysis found for this source. Run "repowright analyze" first.'));
     return;
   }
 
@@ -38,7 +38,6 @@ export async function handleRun(taskId: string, options?: RunOptions): Promise<v
   console.log(chalk.blue('Generating review...'));
   const review = generateReview({ run, task, analysis, repo });
 
-  // Auto-save execution outcome to memory
   autoSaveExecutionOutcome(run, task, review, repo);
 
   console.log(chalk.green(`Review complete. Confidence: ${(review.confidence * 100).toFixed(0)}%`));

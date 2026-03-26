@@ -78,6 +78,8 @@ export const CodeQuality = z.object({
   commentRatio: z.number(), // 0-1
   totalFunctions: z.number(),
   avgFunctionLength: z.number(),
+  totalAllScopeCodeLines: z.number().optional(), // includes vendor/test/docs/generated
+  totalAllScopeFunctions: z.number().optional(),
   maxFileLines: z.number(),
   maxFilePath: z.string(),
   maxNestingDepth: z.number(),

@@ -5,7 +5,7 @@ export const LANGUAGE_MAP: Record<string, string> = {
   '.ts': 'TypeScript', '.tsx': 'TypeScript',
   '.js': 'JavaScript', '.jsx': 'JavaScript', '.mjs': 'JavaScript', '.cjs': 'JavaScript',
   '.py': 'Python', '.go': 'Go', '.rs': 'Rust', '.java': 'Java', '.rb': 'Ruby',
-  '.c': 'C', '.cpp': 'C++', '.h': 'C/C++', '.cs': 'C#', '.php': 'PHP',
+  '.c': 'C', '.cpp': 'C++', '.cc': 'C++', '.cxx': 'C++', '.hpp': 'C++', '.h': 'C/C++', '.cs': 'C#', '.php': 'PHP',
   '.swift': 'Swift', '.kt': 'Kotlin', '.dart': 'Dart', '.lua': 'Lua',
   '.md': 'Markdown', '.json': 'JSON', '.yaml': 'YAML', '.yml': 'YAML',
   '.toml': 'TOML', '.sh': 'Shell', '.bash': 'Shell', '.sql': 'SQL',
@@ -46,7 +46,7 @@ const FRAMEWORK_PATTERNS: Record<string, { files: string[]; deps: string[] }> = 
   TypeORM: { files: [], deps: ['typeorm'] },
   Sequelize: { files: [], deps: ['sequelize'] },
   Tailwind: { files: ['tailwind.config.js', 'tailwind.config.ts'], deps: ['tailwindcss'] },
-  Docker: { files: ['Dockerfile', 'docker-compose.yml', 'docker-compose.yaml'], deps: [] },
+  Docker: { files: ['Dockerfile', 'docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'], deps: [] },
   Electron: { files: [], deps: ['electron'] },
   'React Native': { files: [], deps: ['react-native'] },
   Storybook: { files: ['.storybook/main.js', '.storybook/main.ts'], deps: ['@storybook/react'] },
@@ -54,6 +54,11 @@ const FRAMEWORK_PATTERNS: Record<string, { files: string[]; deps: string[] }> = 
   SQLAlchemy: { files: [], deps: ['sqlalchemy'] },
   Pydantic: { files: [], deps: ['pydantic'] },
   Pytest: { files: ['pytest.ini', 'conftest.py'], deps: ['pytest'] },
+  Typer: { files: [], deps: ['typer'] },
+  Click: { files: [], deps: ['click'] },
+  Gradio: { files: [], deps: ['gradio'] },
+  LiteLLM: { files: [], deps: ['litellm'] },
+  Loguru: { files: [], deps: ['loguru'] },
   Alembic: { files: ['alembic.ini'], deps: ['alembic'] },
   Streamlit: { files: [], deps: ['streamlit'] },
   Echo: { files: [], deps: ['github.com/labstack/echo'] },
@@ -67,8 +72,18 @@ const FRAMEWORK_PATTERNS: Record<string, { files: string[]; deps: string[] }> = 
   Serde: { files: [], deps: ['serde'] },
   Maven: { files: ['pom.xml'], deps: [] },
   Gradle: { files: ['build.gradle', 'build.gradle.kts'], deps: [] },
+  Vitest: { files: ['vitest.config.ts', 'vitest.config.js', 'vitest.config.mts'], deps: ['vitest'] },
+  Jest: { files: ['jest.config.js', 'jest.config.ts', 'jest.config.mjs'], deps: ['jest'] },
   GraphQL: { files: [], deps: ['graphql', 'juniper', 'async-graphql', 'graphene'] },
   gRPC: { files: [], deps: ['grpc', '@grpc/grpc-js', 'tonic', 'google.golang.org/grpc'] },
+  Jinja2: { files: [], deps: ['jinja2', 'Jinja2'] },
+  APScheduler: { files: [], deps: ['apscheduler', 'APScheduler'] },
+  httpx: { files: [], deps: ['httpx'] },
+  Clap: { files: [], deps: ['clap'] },
+  Reqwest: { files: [], deps: ['reqwest'] },
+  Ratatui: { files: [], deps: ['ratatui'] },
+  Helm: { files: ['Chart.yaml'], deps: [] },
+  CMake: { files: ['CMakeLists.txt'], deps: [] },
 };
 
 function hasThreshold(contents: Map<string, string>, tester: (c: string) => boolean, minHits = 3, minRatio = 0.05): boolean {
@@ -91,7 +106,7 @@ const PATTERN_INDICATORS: Record<string, (files: string[], contents: Map<string,
   'Middleware Chain': (_files, contents) => hasThreshold(contents, (c) => /app\.use\(/i.test(c)),
   'Event-Driven': (_files, contents) => hasThreshold(contents, (c) => /\.on\(|\.emit\(|EventEmitter|addEventListener/i.test(c)),
   'CLI Architecture': (files) => files.some((f) => /[\\/]cli[\\/]|[\\/]commands?[\\/]/i.test(f)),
-  'REST API': (_files, contents) => hasThreshold(contents, (c) => /app\.(get|post|put|delete|patch)\s*\(/i.test(c)),
+  'REST API': (_files, contents) => hasThreshold(contents, (c) => /app\.(get|post|put|delete|patch)\s*\(/i.test(c) || /@app\.(get|post|put|delete|patch)\s*\(/i.test(c) || /APIRouter|FastAPI\(\)/i.test(c)),
   GraphQL: (_files, contents) => hasThreshold(contents, (c) => /typeDefs|resolvers|gql`|graphql/i.test(c)),
   'State Management': (_files, contents) => hasThreshold(contents, (c) => /useReducer|createStore|createSlice|zustand|recoil|jotai/i.test(c), 1, 0.01),
   Monorepo: (files) => files.some((f) => f === 'pnpm-workspace.yaml' || f === 'lerna.json' || f === 'turbo.json'),
@@ -155,6 +170,10 @@ export function detectFrameworks(
     }
     if (deps.some((d) => configText.includes(d))) detected.add(fw);
   }
+
+  // Directory-pattern-based frameworks
+  if (filePaths.some((f) => /\.github[\\/]workflows[\\/]/i.test(f))) detected.add('GitHub Actions');
+
   return Array.from(detected).sort();
 }
 
@@ -183,7 +202,7 @@ export function buildTechStack(
   if (filePaths.some((f) => f.includes('biome'))) stack.add('Biome');
   if (filePaths.some((f) => f.includes('.eslintrc') || f.includes('eslint.config'))) stack.add('ESLint');
   if (filePaths.some((f) => f.includes('.prettierrc'))) stack.add('Prettier');
-  if (filePaths.some((f) => f === 'Dockerfile' || f === 'docker-compose.yml')) stack.add('Docker');
+  if (filePaths.some((f) => /(?:^|[\\/])Dockerfile(?:\.\w+)?$/.test(f) || /(?:^|[\\/])(?:docker-)?compose\.ya?ml$/.test(f))) stack.add('Docker');
   if (filePaths.some((f) => f.includes('.github/workflows'))) stack.add('GitHub Actions');
   if (filePaths.some((f) => f.includes('.gitlab-ci'))) stack.add('GitLab CI');
 

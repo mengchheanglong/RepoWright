@@ -2,6 +2,13 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 
+const DATA_DIR_NAME = 'repowright-data';
+const LEGACY_DATA_DIR_NAMES = ['sourcelens-data', 'operator-data'] as const;
+const HOME_DATA_DIR_NAME = '.repowright';
+const LEGACY_HOME_DATA_DIR_NAMES = ['.sourcelens', '.operator'] as const;
+const DB_FILENAME = 'repowright.db';
+const LEGACY_DB_FILENAMES = ['sourcelens.db', 'operator.db'] as const;
+
 export interface OperatorConfig {
   dataDir: string;
   runsDir: string;
@@ -13,16 +20,32 @@ export interface OperatorConfig {
 }
 
 function resolveDataDir(): string {
-  if (process.env.OPERATOR_DATA_DIR) {
-    return process.env.OPERATOR_DATA_DIR;
+  const explicitDataDir =
+    process.env.REPOWRIGHT_DATA_DIR ??
+    process.env.SOURCELENS_DATA_DIR ??
+    process.env.OPERATOR_DATA_DIR;
+  if (explicitDataDir) {
+    return explicitDataDir;
   }
 
   const workspaceRoot = findWorkspaceRoot(process.cwd());
   if (workspaceRoot) {
-    return path.join(workspaceRoot, 'operator-data');
+    for (const legacyDirName of LEGACY_DATA_DIR_NAMES) {
+      const legacyDataDir = path.join(workspaceRoot, legacyDirName);
+      if (fs.existsSync(legacyDataDir)) {
+        return legacyDataDir;
+      }
+    }
+    return path.join(workspaceRoot, DATA_DIR_NAME);
   }
 
-  return path.join(os.homedir(), '.operator');
+  for (const legacyDirName of LEGACY_HOME_DATA_DIR_NAMES) {
+    const legacyHomeDir = path.join(os.homedir(), legacyDirName);
+    if (fs.existsSync(legacyHomeDir)) {
+      return legacyHomeDir;
+    }
+  }
+  return path.join(os.homedir(), HOME_DATA_DIR_NAME);
 }
 
 function findWorkspaceRoot(startDir: string): string | null {
@@ -46,11 +69,21 @@ export function loadConfig(overrides: Partial<OperatorConfig> = {}): OperatorCon
   return {
     dataDir,
     runsDir: overrides.runsDir ?? path.join(dataDir, 'runs'),
-    dbPath: overrides.dbPath ?? path.join(dataDir, 'operator.db'),
+    dbPath: overrides.dbPath ?? resolveDbPath(dataDir),
     logLevel: overrides.logLevel ?? 'info',
     // 0 means unlimited.
     maxDeepCodeFileCount: overrides.maxDeepCodeFileCount ?? 0,
     maxFileAnalysisCount: overrides.maxFileAnalysisCount ?? 0,
     maxFileSizeBytes: overrides.maxFileSizeBytes ?? 0,
   };
+}
+
+function resolveDbPath(dataDir: string): string {
+  for (const legacyDbFilename of LEGACY_DB_FILENAMES) {
+    const legacyDbPath = path.join(dataDir, legacyDbFilename);
+    if (fs.existsSync(legacyDbPath)) {
+      return legacyDbPath;
+    }
+  }
+  return path.join(dataDir, DB_FILENAME);
 }

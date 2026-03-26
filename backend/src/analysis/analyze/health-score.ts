@@ -32,7 +32,8 @@ function hasFile(fileList: string[], pattern: RegExp): boolean {
 function hasFileExact(fileList: string[], names: string[]): boolean {
   return names.some((name) => fileList.some((f) => {
     const lower = f.toLowerCase();
-    return lower === name.toLowerCase() || lower.endsWith('/' + name.toLowerCase());
+    const nameLower = name.toLowerCase();
+    return lower === nameLower || lower.endsWith('/' + nameLower) || lower.endsWith('\\' + nameLower);
   }));
 }
 
@@ -191,7 +192,7 @@ function scoreSecurity(
 
   const hasLockFile = hasFileExact(fileList, [
     'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb',
-    'Pipfile.lock', 'poetry.lock', 'Cargo.lock', 'Gemfile.lock', 'go.sum',
+    'Pipfile.lock', 'poetry.lock', 'uv.lock', 'Cargo.lock', 'Gemfile.lock', 'go.sum',
   ]);
   if (hasLockFile) {
     score += 15;
@@ -292,7 +293,7 @@ function scoreMaintainability(
     }
   }
 
-  const hasSrcDir = hasFile(fileList, /^src\//i) || hasFile(fileList, /^lib\//i) || hasFile(fileList, /^app\//i);
+  const hasSrcDir = hasFile(fileList, /^src[\\/]/i) || hasFile(fileList, /^lib[\\/]/i) || hasFile(fileList, /^app[\\/]/i);
   if (hasSrcDir) {
     score += 10;
     details.push('Good module structure (src/lib/app directory)');
@@ -372,7 +373,7 @@ function scoreDependencies(
 
   const hasLockFile = hasFileExact(fileList, [
     'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb',
-    'Pipfile.lock', 'poetry.lock', 'Cargo.lock', 'Gemfile.lock', 'go.sum',
+    'Pipfile.lock', 'poetry.lock', 'uv.lock', 'Cargo.lock', 'Gemfile.lock', 'go.sum',
   ]);
   if (hasLockFile) {
     score += 20;

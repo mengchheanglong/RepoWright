@@ -6,7 +6,7 @@ import { analyzeSource } from '../../src/analysis/analyze/index.js';
 import { loadConfig } from '../../src/core/config.js';
 import type { Source } from '../../src/domain/schemas.js';
 
-const config = loadConfig({ dataDir: path.join(os.tmpdir(), `operator-test-${Date.now()}`) });
+const config = loadConfig({ dataDir: path.join(os.tmpdir(), `repowright-test-${Date.now()}`) });
 
 function makeSource(overrides: Partial<Source> = {}): Source {
   return {
