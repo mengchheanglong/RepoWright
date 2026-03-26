@@ -1,0 +1,12 @@
+{
+  "repoName": "RepoWright Backend",
+  "repoPath": "C:/Users/User/projects/RepoWright/backend",
+  "notes": "Manual baseline from direct code/config inspection, used as an independent cross-check against the analyzer output.",
+  "truth": {
+    "languages": ["TypeScript", "JSON"],
+    "frameworks": ["Express", "Drizzle", "Vitest"],
+    "patterns": ["REST API", "CLI Architecture", "Middleware Chain"],
+    "classification": "improve-architecture",
+    "security_titles": ["Missing Security Headers", "CORS Wildcard Origin"]
+  }
+}
