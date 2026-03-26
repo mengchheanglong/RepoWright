@@ -186,50 +186,51 @@ export function RunDocumentModal({ data, onClose }) {
           </div>
           <button type="button" className="ghost" onClick={onClose}>Close</button>
         </div>
+        <div className="detail-modal-body">
+          <div className="detail-meta-grid">
+            {data.source && (
+              <div className="detail-card">
+                <span className="core-label">Source</span>
+                <strong>{data.source.name}</strong>
+                <small>{data.source.id}</small>
+              </div>
+            )}
+            {data.task && (
+              <div className="detail-card">
+                <span className="core-label">Task</span>
+                <strong>{data.task.title}</strong>
+                <small>{data.task.difficulty}</small>
+              </div>
+            )}
+            {data.review && (
+              <div className="detail-card">
+                <span className="core-label">Next Action</span>
+                <strong>{data.review.nextAction}</strong>
+                <small>{Math.round((data.review.confidence ?? 0) * 100)}% confidence</small>
+              </div>
+            )}
+          </div>
 
-        <div className="detail-meta-grid">
-          {data.source && (
-            <div className="detail-card">
-              <span className="core-label">Source</span>
-              <strong>{data.source.name}</strong>
-              <small>{data.source.id}</small>
+          {docSections.length > 0 && (
+            <div className="detail-docs">
+              {docSections.map(([label, content]) => (
+                <div key={label} className="detail-doc-card">
+                  <span className="core-label">{label}</span>
+                  <pre>{content}</pre>
+                </div>
+              ))}
             </div>
           )}
-          {data.task && (
-            <div className="detail-card">
-              <span className="core-label">Task</span>
-              <strong>{data.task.title}</strong>
-              <small>{data.task.difficulty}</small>
-            </div>
-          )}
-          {data.review && (
-            <div className="detail-card">
-              <span className="core-label">Next Action</span>
-              <strong>{data.review.nextAction}</strong>
-              <small>{Math.round((data.review.confidence ?? 0) * 100)}% confidence</small>
+
+          {data.artifacts?.length > 0 && (
+            <div className="detail-artifacts">
+              <span className="core-label">Artifacts</span>
+              <div className="imp-files">
+                {data.artifacts.map((artifact) => <code key={artifact.id}>{artifact.type}</code>)}
+              </div>
             </div>
           )}
         </div>
-
-        {docSections.length > 0 && (
-          <div className="detail-docs">
-            {docSections.map(([label, content]) => (
-              <div key={label} className="detail-doc-card">
-                <span className="core-label">{label}</span>
-                <pre>{content}</pre>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {data.artifacts?.length > 0 && (
-          <div className="detail-artifacts">
-            <span className="core-label">Artifacts</span>
-            <div className="imp-files">
-              {data.artifacts.map((artifact) => <code key={artifact.id}>{artifact.type}</code>)}
-            </div>
-          </div>
-        )}
       </div>
     </section>
   );
