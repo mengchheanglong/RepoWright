@@ -37,7 +37,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   source_id TEXT NOT NULL REFERENCES sources(id),
   title TEXT NOT NULL,
   rationale TEXT NOT NULL,
+  why_now TEXT,
+  confidence REAL,
   expected_value TEXT NOT NULL,
+  alternatives TEXT,
+  execution_contract TEXT,
   difficulty TEXT NOT NULL,
   definition_of_done TEXT NOT NULL,
   risk_notes TEXT NOT NULL,
@@ -107,6 +111,10 @@ function migrateSchema(database: Database.Database): void {
   ensureColumn(database, 'reviews', 'done_score', 'REAL');
   ensureColumn(database, 'reviews', 'findings', 'TEXT');
   ensureColumn(database, 'runs', 'idempotency_key', 'TEXT');
+  ensureColumn(database, 'tasks', 'why_now', 'TEXT');
+  ensureColumn(database, 'tasks', 'confidence', 'REAL');
+  ensureColumn(database, 'tasks', 'alternatives', 'TEXT');
+  ensureColumn(database, 'tasks', 'execution_contract', 'TEXT');
 }
 
 function ensureColumn(
