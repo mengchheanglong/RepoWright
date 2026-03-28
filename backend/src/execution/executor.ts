@@ -37,6 +37,7 @@ export interface ExecuteOptions {
   repo: Repository;
   backend?: BackendType;
   idempotencyKey?: string;
+  safetyProfile?: 'conservative' | 'balanced' | 'aggressive';
 }
 
 export async function executeTask(opts: ExecuteOptions): Promise<ExecutionRun> {
@@ -63,6 +64,8 @@ export async function executeTask(opts: ExecuteOptions): Promise<ExecutionRun> {
   };
   repo.saveRun(run);
 
+  const safetyProfile = opts.safetyProfile ?? 'balanced';
+
   const commandLog: RunCommandRecord[] = [];
 
   logger.setLogFile(path.join(runDir, 'logs.jsonl'));
@@ -78,6 +81,10 @@ export async function executeTask(opts: ExecuteOptions): Promise<ExecutionRun> {
   writeJson(path.join(runDir, 'analysis.json'), analysis);
   writeJson(path.join(runDir, 'tasks.json'), [task]);
   writeJson(path.join(runDir, 'source.json'), source);
+  writeJson(path.join(runDir, 'execution-safety.json'), {
+    profile: safetyProfile,
+    controls: describeSafetyProfile(safetyProfile),
+  });
 
   repo.updateRunStatus(runId, 'executing');
   logger.info(`Run ${runId}: executing task "${task.title}"`);
@@ -101,6 +108,7 @@ export async function executeTask(opts: ExecuteOptions): Promise<ExecutionRun> {
       source,
       result,
       artifactRecords,
+      safetyProfile,
     );
     finalizeRunStatus(runId, result, repo, logger);
 
@@ -225,6 +233,7 @@ function saveRunMetadata(
   source: Source,
   result: ExecutionResult,
   artifactRecords: RunArtifact[],
+  safetyProfile: 'conservative' | 'balanced' | 'aggressive',
 ): void {
   writeJson(path.join(runDir, 'run.json'), {
     ...run,
@@ -238,8 +247,30 @@ function saveRunMetadata(
   const artifactList = artifactRecords.map((a) => `- ${a.description}`).join('\n');
   writeMarkdown(
     path.join(runDir, 'summary.md'),
-    `# Run ${runId}\n\n**Task:** ${task.title}\n**Source:** ${source.name}\n**Status:** ${status}\n**Execution Engine:** ${backendDisplayName(run.backend)}\n\n## Output\n${result.output}\n\n## Artifacts\n${artifactList}\n`,
+    `# Run ${runId}\n\n**Task:** ${task.title}\n**Source:** ${source.name}\n**Status:** ${status}\n**Execution Engine:** ${backendDisplayName(run.backend)}\n**Safety Profile:** ${safetyProfile}\n\n## Output\n${result.output}\n\n## Artifacts\n${artifactList}\n`,
   );
+}
+
+function describeSafetyProfile(profile: 'conservative' | 'balanced' | 'aggressive'): string[] {
+  if (profile === 'conservative') {
+    return [
+      'Prefer minimal file edits and bounded scope.',
+      'Prioritize verification artifacts before broader modifications.',
+      'Escalate on ambiguous ownership or missing context.',
+    ];
+  }
+  if (profile === 'aggressive') {
+    return [
+      'Allow broader refactor scope when confidence is high.',
+      'Favor fast execution with post-run verification.',
+      'Permit multi-file changes in a single run.',
+    ];
+  }
+  return [
+    'Balance scope control with delivery speed.',
+    'Require clear verification checks for changed areas.',
+    'Escalate only when confidence drops significantly.',
+  ];
 }
 
 function finalizeRunStatus(

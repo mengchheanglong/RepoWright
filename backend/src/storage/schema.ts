@@ -37,7 +37,11 @@ export const tasks = sqliteTable('tasks', {
     .references(() => sources.id),
   title: text('title').notNull(),
   rationale: text('rationale').notNull(),
+  whyNow: text('why_now'),
+  confidence: real('confidence'),
   expectedValue: text('expected_value').notNull(),
+  alternatives: text('alternatives'), // JSON array string
+  executionContract: text('execution_contract'), // JSON string
   difficulty: text('difficulty').notNull(),
   definitionOfDone: text('definition_of_done').notNull(),
   riskNotes: text('risk_notes').notNull(),

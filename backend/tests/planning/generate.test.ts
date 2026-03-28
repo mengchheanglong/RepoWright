@@ -38,6 +38,12 @@ describe('generateTasks', () => {
       expect(t.difficulty).toBeTruthy();
       expect(t.definitionOfDone).toBeTruthy();
       expect(t.riskNotes).toBeTruthy();
+      expect(t.whyNow).toBeTruthy();
+      expect(t.confidence).toBeGreaterThan(0);
+      expect(t.confidence).toBeLessThanOrEqual(1);
+      expect(Array.isArray(t.alternatives)).toBe(true);
+      expect(t.executionContract?.intent).toBeTruthy();
+      expect(t.executionContract?.verification.length).toBeGreaterThan(0);
     }
   });
 

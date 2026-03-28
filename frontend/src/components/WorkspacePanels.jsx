@@ -26,15 +26,34 @@ export function TasksSection({ tasks, onRunTask, busy, runningTaskId }) {
                 {diffBadge(t.difficulty)}
               </div>
               <p className="task-rationale">{t.rationale}</p>
+              {t.whyNow && <p className="task-rationale"><strong>Why now:</strong> {t.whyNow}</p>}
               <div className="task-meta">
                 <div>
                   <span className="core-label">Definition of Done</span>
                   <p className="task-dod">{t.definitionOfDone}</p>
                 </div>
+                {typeof t.confidence === 'number' && (
+                  <div>
+                    <span className="core-label">Task Confidence</span>
+                    <p className="task-dod">{Math.round(t.confidence * 100)}%</p>
+                  </div>
+                )}
                 {t.riskNotes && (
                   <div>
                     <span className="core-label">Risk</span>
                     <p className="task-risk">{t.riskNotes}</p>
+                  </div>
+                )}
+                {Array.isArray(t.alternatives) && t.alternatives.length > 0 && (
+                  <div>
+                    <span className="core-label">Why not alternatives</span>
+                    <ul>
+                      {t.alternatives.slice(0, 2).map((alt) => (
+                        <li key={`${t.id}-${alt.title}`}>
+                          <strong>{alt.title}:</strong> {alt.reasonDeferred}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
               </div>
