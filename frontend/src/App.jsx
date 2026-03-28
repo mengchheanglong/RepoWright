@@ -39,6 +39,11 @@ export default function App() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [runningTaskId, setRunningTaskId] = useState(null);
+  const [intentInput, setIntentInput] = useState('');
+  const [safetyProfile, setSafetyProfile] = useState('balanced');
+  const [portfolioTriage, setPortfolioTriage] = useState([]);
+  const [proofOfValue, setProofOfValue] = useState(null);
+  const [latestTrustEnvelope, setLatestTrustEnvelope] = useState(null);
 
   // ── Data loading ─────────────────────────────────────────────
 
@@ -63,6 +68,9 @@ export default function App() {
       const meta = await request('/capabilities').catch(() => null);
       if (meta) setCapabilities(meta);
     }
+
+    const triage = await request('/portfolio-triage').catch(() => ({ items: [] }));
+    setPortfolioTriage(triage.items ?? []);
   }
 
   useEffect(() => {
@@ -89,6 +97,16 @@ export default function App() {
       .catch(() => setNextTaskHint(null));
   }, [activeSourceId, runs.length, tasks.length]);
 
+  useEffect(() => {
+    if (!activeSourceId) {
+      setProofOfValue(null);
+      return;
+    }
+    request(`/proof-of-value/${activeSourceId}`)
+      .then((payload) => setProofOfValue(payload))
+      .catch(() => setProofOfValue(null));
+  }, [activeSourceId, runs.length]);
+
   // ── Action handlers ──────────────────────────────────────────
 
   async function onIngest(event) {
@@ -100,7 +118,7 @@ export default function App() {
     try {
       const payload = await request('/ingest', {
         method: 'POST',
-        body: JSON.stringify({ source: sourceInput.trim() }),
+        body: JSON.stringify({ source: sourceInput.trim(), intent: intentInput.trim() || undefined }),
       });
       const source = payload.source ?? null;
       const nextAnalysis = payload.analysis ?? null;
@@ -110,6 +128,7 @@ export default function App() {
       setAnalysis(nextAnalysis);
       setTasks(nextTasks);
       setSourceInput('');
+      setIntentInput('');
       setComparison(null);
       setStatus(`Analysis complete for "${source.name ?? source.id}".`);
       await refresh();
@@ -151,11 +170,13 @@ export default function App() {
       const idempotencyKey = `task:${task.id}:source:${task.sourceId}`;
       const payload = await request('/run', {
         method: 'POST',
-        body: JSON.stringify({ taskId: task.id, idempotencyKey }),
+        body: JSON.stringify({ taskId: task.id, idempotencyKey, safetyProfile }),
       });
       const nextRun = payload.run ?? null;
       if (!nextRun) throw new Error('Run response was incomplete.');
       setStatus(payload.reused ? `Run ${nextRun.id} reused (idempotent replay).` : `Run ${nextRun.id} completed.`);
+      const trust = await request(`/trust-envelope/${nextRun.id}`).catch(() => null);
+      if (trust?.envelope) setLatestTrustEnvelope(trust.envelope);
       await refresh();
       await openRunDocument(nextRun.id);
     } catch (err) {
@@ -208,6 +229,25 @@ export default function App() {
     } catch (err) {
       setError(err.message);
       setStatus('Comparison failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createWorkOrder() {
+    if (!activeSourceId || !intentInput.trim()) return;
+    setBusy(true);
+    setError('');
+    try {
+      const payload = await request('/work-order', {
+        method: 'POST',
+        body: JSON.stringify({ sourceId: activeSourceId, intent: intentInput.trim() }),
+      });
+      setTasks(payload.tasks ?? tasks);
+      setStatus(payload.summary ?? 'Work order created.');
+      await refresh();
+    } catch (err) {
+      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -279,7 +319,23 @@ export default function App() {
             placeholder="Path to project, git URL, or text brief"
             onChange={(e) => setSourceInput(e.target.value)}
           />
+          <input
+            type="text"
+            value={intentInput}
+            placeholder="Optional intent (e.g., reduce CI flakiness)"
+            onChange={(e) => setIntentInput(e.target.value)}
+          />
+          <select value={safetyProfile} onChange={(e) => setSafetyProfile(e.target.value)}>
+            <option value="conservative">Conservative safety</option>
+            <option value="balanced">Balanced safety</option>
+            <option value="aggressive">Aggressive safety</option>
+          </select>
           <button type="submit" disabled={busy}>Analyze</button>
+          {activeSourceId && (
+            <button type="button" onClick={createWorkOrder} disabled={busy || !intentInput.trim()} className="ghost">
+              Create Work Order
+            </button>
+          )}
           <button type="button" onClick={refresh} disabled={busy} className="ghost">Refresh</button>
         </form>
         {activeSource && (
@@ -346,6 +402,32 @@ export default function App() {
               <button type="button" className="secondary-action" onClick={() => runTask(recommendedTask)} disabled={busy}>
                 Run Recommended Task
               </button>
+            </section>
+          )}
+          {latestTrustEnvelope && (
+            <section className="report-section card">
+              <h3>Run Trust Envelope</h3>
+              <p>Trust: <strong>{latestTrustEnvelope.trustLevel}</strong> | Risk signals: {latestTrustEnvelope.unresolvedRiskCount}</p>
+              <p>Analysis confidence: {latestTrustEnvelope.analysisConfidence ?? 'n/a'} | Execution confidence: {latestTrustEnvelope.executionConfidence ?? 'n/a'}</p>
+            </section>
+          )}
+          {proofOfValue?.metrics && (
+            <section className="report-section card">
+              <h3>Proof of Value</h3>
+              <p>Runs: {proofOfValue.metrics.runCount} | Completion rate: {Math.round((proofOfValue.metrics.completionRate ?? 0) * 100)}%</p>
+              <p>Average done score: {proofOfValue.metrics.averageDoneScore} | Avg review confidence: {proofOfValue.metrics.averageReviewConfidence}</p>
+            </section>
+          )}
+          {portfolioTriage.length > 0 && (
+            <section className="report-section card">
+              <h3>Portfolio Triage</h3>
+              <ul>
+                {portfolioTriage.slice(0, 5).map((item) => (
+                  <li key={item.sourceId}>
+                    <strong>{item.name}</strong> — score {item.portfolioScore} ({item.pendingTaskCount} pending)
+                  </li>
+                ))}
+              </ul>
             </section>
           )}
           {analysis && !deep && <BasicAnalysisSection analysis={analysis} />}

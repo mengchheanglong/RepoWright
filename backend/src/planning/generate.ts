@@ -16,6 +16,11 @@ interface FindingsBucket {
   difficulty: Difficulty;
 }
 
+interface TaskAlternative {
+  title: string;
+  reasonDeferred: string;
+}
+
 /**
  * Generate tasks from an analysis report. If deepAnalysis is present, derives
  * specific, actionable tasks from the findings. Otherwise falls back to
@@ -158,6 +163,10 @@ function generateFindingsDrivenTasks(report: AnalysisReport): CandidateTask[] {
       : '';
 
     const difficulty = deriveDifficulty(bucket);
+    const confidence = deriveTaskConfidence(report, bucket, totalIssueCount);
+    const alternatives = buildAlternatives(bucket);
+    const executionContract = buildExecutionContract(bucket, totalIssueCount, allFiles);
+    const whyNow = buildWhyNow(bucket, totalIssueCount, confidence);
 
     return {
       id: generateId('tsk'),
@@ -165,7 +174,11 @@ function generateFindingsDrivenTasks(report: AnalysisReport): CandidateTask[] {
       sourceId: report.sourceId,
       title: `Fix ${totalIssueCount} ${bucket.label.toLowerCase()} issue(s): ${issueList.slice(0, 120)}`,
       rationale: `Analysis found ${totalIssueCount} ${bucket.label.toLowerCase()} finding(s)${fileRef}. Addressing these improves code quality and maintainability.`,
+      whyNow,
+      confidence,
       expectedValue: `Resolved ${bucket.label.toLowerCase()} issues with measurable metric improvements.`,
+      alternatives,
+      executionContract,
       difficulty,
       definitionOfDone: buildDefinitionOfDone(bucket),
       riskNotes: buildRiskNotes(bucket, allFiles),
@@ -173,6 +186,95 @@ function generateFindingsDrivenTasks(report: AnalysisReport): CandidateTask[] {
       createdAt: timestamp,
     };
   });
+}
+
+function deriveTaskConfidence(
+  report: AnalysisReport,
+  bucket: FindingsBucket,
+  totalIssueCount: number,
+): number {
+  const base = report.confidence;
+  const issueWeight = Math.min(totalIssueCount * 0.03, 0.18);
+  const bucketBias =
+    bucket.label === 'Code Health' ? 0.08 : bucket.label === 'Documentation & Maintenance' ? 0.06 : 0.02;
+  return Number(Math.max(0.35, Math.min(0.98, base + issueWeight + bucketBias)).toFixed(2));
+}
+
+function buildWhyNow(bucket: FindingsBucket, totalIssueCount: number, confidence: number): string {
+  const confidencePercent = Math.round(confidence * 100);
+  if (bucket.label === 'Architecture') {
+    return `Prioritized now because architectural debt compounds quickly and ${totalIssueCount} structural finding(s) are blocking safer future changes (${confidencePercent}% confidence).`;
+  }
+  if (bucket.label === 'Code Health') {
+    return `Prioritized now because ${totalIssueCount} code health issue(s) are directly increasing defect risk and slowing delivery (${confidencePercent}% confidence).`;
+  }
+  return `Prioritized now because maintenance/documentation gaps are fast to resolve and improve execution reliability (${confidencePercent}% confidence).`;
+}
+
+function buildAlternatives(bucket: FindingsBucket): TaskAlternative[] {
+  if (bucket.label === 'Architecture') {
+    return [
+      {
+        title: 'Address documentation gaps first',
+        reasonDeferred: 'Lower immediate risk reduction than resolving architectural blockers.',
+      },
+      {
+        title: 'Refactor style-only issues',
+        reasonDeferred: 'Cosmetic improvements deferred until structural risks are reduced.',
+      },
+    ];
+  }
+
+  if (bucket.label === 'Code Health') {
+    return [
+      {
+        title: 'Tackle architecture changes first',
+        reasonDeferred: 'Architecture work deferred until baseline code safety issues are reduced.',
+      },
+      {
+        title: 'Improve comments and docs only',
+        reasonDeferred: 'Documentation-only work has lower near-term defect reduction.',
+      },
+    ];
+  }
+
+  return [
+    {
+      title: 'Refactor broad architecture concerns',
+      reasonDeferred: 'Higher effort and risk than fast maintenance wins.',
+    },
+    {
+      title: 'Large-scale quality cleanup',
+      reasonDeferred: 'Maintenance/documentation tasks provide quicker confidence gains.',
+    },
+  ];
+}
+
+function buildExecutionContract(bucket: FindingsBucket, totalIssueCount: number, files: string[]) {
+  const intent =
+    bucket.label === 'Architecture'
+      ? 'Reduce structural fragility and improve change safety.'
+      : bucket.label === 'Code Health'
+        ? 'Reduce immediate code quality risk and improve maintainability.'
+        : 'Improve maintainability and execution readiness with low-risk updates.';
+
+  return {
+    intent,
+    scope:
+      files.length > 0
+        ? `Primary scope: ${files.slice(0, 5).join(', ')}${files.length > 5 ? ` (+${files.length - 5} more)` : ''}`
+        : `Cross-cutting ${bucket.label.toLowerCase()} updates with no single-file hotspot.`,
+    expectedCodeImpact: `Resolve ${totalIssueCount} ${bucket.label.toLowerCase()} finding(s) with observable quality improvements.`,
+    verification: [
+      'All acceptance criteria in Definition of Done are satisfied.',
+      'No new errors are introduced in affected modules.',
+      'Changed files pass existing quality and test checks where available.',
+    ],
+    stopConditions: [
+      'Stop and escalate if required changes exceed the intended scope.',
+      'Stop and escalate if confidence drops due to ambiguous ownership or missing context.',
+    ],
+  };
 }
 
 function collectConfigIssues(cfg: NonNullable<AnalysisReport['deepAnalysis']>['configAnalysis']): string[] {
@@ -398,6 +500,16 @@ const TASK_TEMPLATES: Record<string, TaskTemplate[]> = {
 function generateClassificationTasks(report: AnalysisReport): CandidateTask[] {
   const templates = TASK_TEMPLATES[report.classification] ?? TASK_TEMPLATES.learn ?? [];
   const timestamp = now();
+  const alternatives: TaskAlternative[] = [
+    {
+      title: 'Execute lower-priority maintenance tasks',
+      reasonDeferred: 'Deferred to focus on the highest-leverage task for current classification.',
+    },
+    {
+      title: 'Perform broad exploratory analysis first',
+      reasonDeferred: 'Action-oriented progress is preferred over additional broad analysis.',
+    },
+  ];
 
   return templates.map((tmpl, i) => ({
     id: generateId('tsk'),
@@ -405,7 +517,17 @@ function generateClassificationTasks(report: AnalysisReport): CandidateTask[] {
     sourceId: report.sourceId,
     title: tmpl.titleFn(report),
     rationale: tmpl.rationaleFn(report),
+    whyNow: `Selected as priority #${i + 1} for "${report.classification}" based on expected near-term value and execution confidence.`,
+    confidence: Number(Math.max(0.45, Math.min(0.9, report.confidence + 0.1 - i * 0.08)).toFixed(2)),
     expectedValue: tmpl.valueFn(report),
+    alternatives,
+    executionContract: {
+      intent: `Advance ${report.classification} outcomes with a scoped, verifiable task.`,
+      scope: `Classification-guided task #${i + 1}.`,
+      expectedCodeImpact: tmpl.valueFn(report),
+      verification: [tmpl.doneFn(report)],
+      stopConditions: ['Stop and escalate if task requires out-of-scope architectural changes.'],
+    },
     difficulty: tmpl.difficulty,
     definitionOfDone: tmpl.doneFn(report),
     riskNotes: tmpl.riskFn(report),

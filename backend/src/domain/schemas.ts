@@ -257,7 +257,26 @@ export const CandidateTask = z.object({
   sourceId: z.string(),
   title: z.string(),
   rationale: z.string(),
+  whyNow: z.string().optional(),
+  confidence: z.number().min(0).max(1).optional(),
   expectedValue: z.string(),
+  alternatives: z
+    .array(
+      z.object({
+        title: z.string(),
+        reasonDeferred: z.string(),
+      }),
+    )
+    .optional(),
+  executionContract: z
+    .object({
+      intent: z.string(),
+      scope: z.string(),
+      expectedCodeImpact: z.string(),
+      verification: z.array(z.string()),
+      stopConditions: z.array(z.string()).optional(),
+    })
+    .optional(),
   difficulty: Difficulty,
   definitionOfDone: z.string(),
   riskNotes: z.string(),

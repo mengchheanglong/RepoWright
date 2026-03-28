@@ -46,6 +46,14 @@ export class Repository {
     return rows.map(mapSource);
   }
 
+  updateSourceMetadata(sourceId: string, metadata: Record<string, unknown>): void {
+    this.db
+      .update(schema.sources)
+      .set({ metadata: JSON.stringify(metadata) })
+      .where(eq(schema.sources.id, sourceId))
+      .run();
+  }
+
   deleteSourceCascade(sourceId: string): {
     deletedSource: boolean;
     runIds: string[];
@@ -143,7 +151,11 @@ export class Repository {
           sourceId: t.sourceId,
           title: t.title,
           rationale: t.rationale,
+          whyNow: t.whyNow ?? null,
+          confidence: t.confidence ?? null,
           expectedValue: t.expectedValue,
+          alternatives: t.alternatives ? JSON.stringify(t.alternatives) : null,
+          executionContract: t.executionContract ? JSON.stringify(t.executionContract) : null,
           difficulty: t.difficulty,
           definitionOfDone: t.definitionOfDone,
           riskNotes: t.riskNotes,
@@ -328,7 +340,11 @@ function mapTask(r: TaskRow): CandidateTask {
     sourceId: r.sourceId,
     title: r.title,
     rationale: r.rationale,
+    whyNow: r.whyNow ?? undefined,
+    confidence: r.confidence ?? undefined,
     expectedValue: r.expectedValue,
+    alternatives: r.alternatives ? JSON.parse(r.alternatives) : undefined,
+    executionContract: r.executionContract ? JSON.parse(r.executionContract) : undefined,
     difficulty: r.difficulty as CandidateTask['difficulty'],
     definitionOfDone: r.definitionOfDone,
     riskNotes: r.riskNotes,
