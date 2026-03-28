@@ -1,13 +1,13 @@
 {
   "repoName": "RepoWright Backend",
   "repoPath": "C:/Users/User/projects/RepoWright/backend",
-  "runtimeMs": 154,
+  "runtimeMs": 291,
   "confidence": 0.95,
   "notes": "Manual baseline from direct code/config inspection, used as an independent cross-check against the analyzer output.",
   "classification": {
     "expected": "improve-architecture",
-    "actual": "extract-skill",
-    "correct": false
+    "actual": "improve-architecture",
+    "correct": true
   },
   "capabilities": {
     "languages": {
@@ -60,23 +60,18 @@
       "actual": [
         "Middleware Chain",
         "CLI Architecture",
-        "REST API",
-        "State Management",
-        "Actor Model"
+        "REST API"
       ],
       "truePositives": [
         "Middleware Chain",
         "CLI Architecture",
         "REST API"
       ],
-      "falsePositives": [
-        "State Management",
-        "Actor Model"
-      ],
+      "falsePositives": [],
       "falseNegatives": [],
-      "precision": 0.6,
+      "precision": 1,
       "recall": 1,
-      "f1": 0.7499999999999999
+      "f1": 1
     },
     "security_titles": {
       "expected": [
@@ -84,27 +79,24 @@
         "CORS Wildcard Origin"
       ],
       "actual": [
-        "Command Injection",
-        "Dynamic eval()",
-        "Missing Security Headers",
         "CORS Wildcard Origin",
-        "Insecure Cookie",
-        "Debug Mode Enabled"
+        "Missing Security Headers"
       ],
       "truePositives": [
-        "Missing Security Headers",
-        "CORS Wildcard Origin"
+        "CORS Wildcard Origin",
+        "Missing Security Headers"
       ],
-      "falsePositives": [
-        "Command Injection",
-        "Dynamic eval()",
-        "Insecure Cookie",
-        "Debug Mode Enabled"
-      ],
+      "falsePositives": [],
       "falseNegatives": [],
-      "precision": 0.3333333333333333,
+      "precision": 1,
       "recall": 1,
-      "f1": 0.5
+      "f1": 1
     }
+  },
+  "summary": {
+    "classificationAccuracy": 1,
+    "macroPrecision": 1,
+    "macroRecall": 1,
+    "macroF1": 1
   }
 }

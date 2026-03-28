@@ -1,6 +1,7 @@
 import path from 'node:path';
-import type { CodeQuality, ConfigAnalysis, DependencyGraph, ImprovementItem } from '../../domain/index.js';
+import type { CodeQuality, ConfigAnalysis, DepAuditReport, DependencyGraph, ImprovementItem } from '../../domain/index.js';
 import { CODE_EXTENSIONS } from './core.js';
+import { hasDynamicCommandExecutionSignal } from './dangerous-execution.js';
 import { classifyPathScope, isActionableCodePath, isLikelyPlaceholderSecret } from './scoping.js';
 
 function confidenceLabel(evidenceCount: number, coverageRatio: number): 'high' | 'medium' | 'low' {
@@ -19,10 +20,13 @@ export function detectImprovements(
   cq: CodeQuality,
   depGraph: DependencyGraph,
   configAnalysis: ConfigAnalysis,
+  depAudit?: DepAuditReport | null,
+  allFilePaths?: string[],
 ): ImprovementItem[] {
   const items: ImprovementItem[] = [];
   const actionableCodeFiles = filePaths.filter((f) => isActionableCodePath(f) && CODE_EXTENSIONS.has(path.extname(f)));
   const coverageRatio = actionableCodeFiles.length / Math.max(filePaths.filter((f) => CODE_EXTENSIONS.has(path.extname(f))).length, 1);
+  const testFileUniverse = allFilePaths ?? filePaths;
 
   if (!hasTests) {
     const startWith = depGraph.centralModules.length > 0
@@ -30,7 +34,7 @@ export function detectImprovements(
       : '';
     items.push({ area: 'Testing', issue: 'No test files detected', suggestion: `Add unit and integration tests for core business logic.${startWith}`, priority: 'high' });
   } else {
-    const testFiles = filePaths.filter((f) => classifyPathScope(f) === 'test');
+    const testFiles = testFileUniverse.filter((f) => classifyPathScope(f) === 'test');
     const ratio = testFiles.length / Math.max(actionableCodeFiles.length, 1);
     if (ratio < 0.1) {
       const untested = depGraph.centralModules.slice(0, 3).map((m) => `${m.file} (${m.importedByCount} dependents)`);
@@ -228,8 +232,7 @@ export function detectImprovements(
   let commandInjectionSignals = 0;
   for (const [fp, content] of fileContents) {
     if (!isActionableCodePath(fp)) continue;
-    const dynamicExec = /(?:exec|spawn|system|popen)\s*\([^)]*(?:\+|\$\{|format\(|f['"]).*\)/i.test(content);
-    if (dynamicExec) {
+    if (hasDynamicCommandExecutionSignal(fp, content)) {
       commandInjectionSignals++;
       commandInjectionFiles.push(fp);
     }
@@ -245,5 +248,101 @@ export function detectImprovements(
     });
   }
 
-  return items.slice(0, 20);
+  // --- New checks: cognitive complexity, argument count, boolean complexity, duplicates ---
+
+  if (cq.maxCognitiveComplexity && cq.maxCognitiveComplexity > 30) {
+    items.push({
+      area: 'Code Complexity',
+      issue: `Cognitive complexity of ${cq.maxCognitiveComplexity} in ${cq.maxCognitiveComplexityFile ?? 'unknown'}`,
+      suggestion: 'Break complex functions into smaller, focused helpers. Use early returns to reduce nesting.',
+      priority: cq.maxCognitiveComplexity > 60 ? 'high' : 'medium',
+      files: cq.maxCognitiveComplexityFile ? [cq.maxCognitiveComplexityFile] : [],
+      estimatedMinutes: Math.min(60, Math.round(cq.maxCognitiveComplexity * 0.3)),
+    });
+  }
+
+  if (cq.maxArgCount && cq.maxArgCount > 5) {
+    items.push({
+      area: 'Code Quality',
+      issue: `Function with ${cq.maxArgCount} parameters (${cq.maxArgCountFile ?? 'unknown'})`,
+      suggestion: 'Group related parameters into an options object or data class. Functions with many parameters are hard to call correctly.',
+      priority: cq.maxArgCount > 8 ? 'high' : 'medium',
+      files: cq.maxArgCountFile ? [cq.maxArgCountFile] : [],
+      estimatedMinutes: 15,
+    });
+  }
+
+  if (cq.booleanComplexityCount && cq.booleanComplexityCount > 3) {
+    items.push({
+      area: 'Code Complexity',
+      issue: `${cq.booleanComplexityCount} lines with 3+ boolean operators (complex conditions)`,
+      suggestion: 'Extract complex boolean expressions into named variables or helper functions for readability.',
+      priority: cq.booleanComplexityCount > 10 ? 'high' : 'medium',
+      estimatedMinutes: Math.min(30, cq.booleanComplexityCount * 3),
+    });
+  }
+
+  if (cq.duplicateBlockCount && cq.duplicateBlockCount > 5) {
+    items.push({
+      area: 'Code Organization',
+      issue: `${cq.duplicateBlockCount} duplicate code block(s) detected across files`,
+      suggestion: 'Extract shared logic into reusable functions or modules to reduce maintenance burden.',
+      priority: cq.duplicateBlockCount > 15 ? 'high' : 'medium',
+      estimatedMinutes: Math.min(60, cq.duplicateBlockCount * 5),
+    });
+  }
+
+  // --- Dependency vulnerabilities ---
+
+  if (depAudit && depAudit.totalVulnerabilities > 0) {
+    const criticalHigh = depAudit.criticalCount + depAudit.highCount;
+    const fixable = depAudit.vulnerabilities.filter((v) => v.fixAvailable).length;
+    items.push({
+      area: 'Security',
+      issue: `${depAudit.totalVulnerabilities} dependency vulnerability(ies) (${depAudit.criticalCount} critical, ${depAudit.highCount} high) via ${depAudit.auditSource}`,
+      suggestion: fixable > 0
+        ? `${fixable} have fixes available. Run package audit fix or update affected dependencies.`
+        : 'Review vulnerable dependencies and consider alternatives or manual patches.',
+      priority: criticalHigh > 0 ? 'high' : 'medium',
+      estimatedMinutes: Math.min(120, depAudit.totalVulnerabilities * 10),
+    });
+  }
+
+  // --- Add remediation time estimates to items that don't have them ---
+
+  for (const item of items) {
+    if (item.estimatedMinutes != null) continue;
+    item.estimatedMinutes = estimateRemediationMinutes(item);
+  }
+
+  return items.slice(0, 25);
+}
+
+function estimateRemediationMinutes(item: ImprovementItem): number {
+  // Estimate based on area and priority — inspired by SonarQube/CodeClimate approaches
+  // Base values represent per-item remediation time in minutes (kept conservative)
+  const baseByArea: Record<string, number> = {
+    'Testing': 30,
+    'Type Safety': 5,
+    'Error Handling': 5,
+    'Code Organization': 15,
+    'Code Complexity': 10,
+    'Code Quality': 10,
+    'Tech Debt': 5,
+    'Architecture': 20,
+    'Dead Code': 5,
+    'TypeScript Config': 10,
+    'Documentation': 10,
+    'Security': 15,
+    'Python Error Handling': 5,
+    'Python Code Quality': 10,
+    'Go Error Handling': 10,
+    'Rust Safety': 10,
+  };
+
+  const base = baseByArea[item.area] ?? 10;
+  const multiplier = item.priority === 'high' ? 1.5 : item.priority === 'medium' ? 1.2 : 1;
+  // Logarithmic scaling for file count to avoid explosive growth
+  const fileScale = Math.max(1, Math.log2((item.files?.length ?? 1) + 1));
+  return Math.round(base * multiplier * fileScale);
 }

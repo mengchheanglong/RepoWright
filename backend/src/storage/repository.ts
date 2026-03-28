@@ -46,14 +46,6 @@ export class Repository {
     return rows.map(mapSource);
   }
 
-  updateSourceMetadata(sourceId: string, metadata: Record<string, unknown>): void {
-    this.db
-      .update(schema.sources)
-      .set({ metadata: JSON.stringify(metadata) })
-      .where(eq(schema.sources.id, sourceId))
-      .run();
-  }
-
   deleteSourceCascade(sourceId: string): {
     deletedSource: boolean;
     runIds: string[];

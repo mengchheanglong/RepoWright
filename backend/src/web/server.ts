@@ -5,11 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { analyzeSource, compareAnalyses } from '../analysis/index.js';
 import { exportToCsv, exportToJson, exportToMarkdown } from '../analysis/export.js';
 import { loadConfig } from '../core/config.js';
+import type { Source } from '../domain/index.js';
 import { executeTask } from '../execution/index.js';
 import { ingestSource } from '../intake/index.js';
 import { generateTasks } from '../planning/index.js';
 import { generateReview } from '../review/index.js';
-import { listBackendCapabilities } from '../routing/router.js';
 import { closeDatabase, getDatabase } from '../storage/database.js';
 import { Repository } from '../storage/repository.js';
 import { initLogger } from '../utils/logger.js';
@@ -50,15 +50,6 @@ app.get('/api/health', (_req: Request, res: Response) => {
     ok: true,
     dataDir: config.dataDir,
     runsDir: config.runsDir,
-  });
-});
-
-app.get('/api/capabilities', (_req: Request, res: Response) => {
-  res.json({
-    apiVersion: '2026-03-26',
-    runRequestSchemaVersion: '1.1.0',
-    runIdempotency: { supported: true, field: 'idempotencyKey' },
-    backends: listBackendCapabilities(),
   });
 });
 
@@ -115,6 +106,8 @@ app.get('/api/tasks/:sourceId', (req: Request, res: Response) => {
   return res.json({ tasks: repo.getTasksBySource(source.id) });
 });
 
+// ── Next-task recommendation with score breakdown ────────────
+
 app.get('/api/next-task/:sourceId', (req: Request, res: Response) => {
   const sourceId = pickParam(req.params.sourceId);
   if (!sourceId) {
@@ -133,69 +126,42 @@ app.get('/api/next-task/:sourceId', (req: Request, res: Response) => {
   const allReviews = runs
     .map((run) => repo.getReview(run.id))
     .filter((review): review is NonNullable<typeof review> => Boolean(review));
-  const nextTask =
-    pending
-      .map((task) => ({
-        task,
-        score: computeTaskPriorityScore(task, allReviews),
-      }))
-      .sort((a, b) => b.score - a.score || a.task.order - b.task.order)[0]?.task ?? null;
+  const analysis = repo.getAnalysisBySource(sourceId);
+  const gitHotspots = analysis?.deepAnalysis?.gitHistory?.hotspots ?? [];
+
+  const scored = pending
+    .map((task) => ({
+      task,
+      breakdown: computeTaskPriorityScore(task, allReviews, gitHotspots),
+    }))
+    .sort((a, b) => b.breakdown.total - a.breakdown.total || a.task.order - b.task.order);
+
+  const top = scored[0] ?? null;
 
   return res.json({
     sourceId,
-    nextTask,
-    summary: nextTask
-      ? `Next suggested task is #${nextTask.order}: ${nextTask.title}`
+    nextTask: top?.task ?? null,
+    scoreBreakdown: top?.breakdown ?? null,
+    summary: top
+      ? `Next suggested task is #${top.task.order}: ${top.task.title}`
       : 'No pending tasks remain for this source.',
     pendingTaskCount: pending.length,
     runCount: runs.length,
   });
 });
 
-app.post('/api/work-order', (req: Request, res: Response) => {
-  try {
-    const sourceId = typeof req.body?.sourceId === 'string' ? req.body.sourceId.trim() : '';
-    const intent = typeof req.body?.intent === 'string' ? req.body.intent.trim() : '';
-    if (!sourceId || !intent) {
-      return res.status(400).json({ error: 'Request fields "sourceId" and "intent" are required.' });
-    }
-
-    const source = repo.getSource(sourceId);
-    if (!source) {
-      return res.status(404).json({ error: `Source not found: ${sourceId}` });
-    }
-
-    const metadata = { ...(source.metadata ?? {}), intent, intentUpdatedAt: new Date().toISOString() };
-    repo.updateSourceMetadata(sourceId, metadata);
-
-    const tasks = repo.getTasksBySource(sourceId);
-    const prioritized = tasks
-      .map((task) => ({
-        ...task,
-        whyNow: `${task.whyNow ?? task.rationale} Intent focus: ${intent}.`,
-      }))
-      .sort((a, b) => computeIntentFitScore(b, intent) - computeIntentFitScore(a, intent));
-
-    return res.json({
-      sourceId,
-      intent,
-      summary: `Created intent-first work order for "${intent}"`,
-      topTask: prioritized[0] ?? null,
-      tasks: prioritized,
-    });
-  } catch (error) {
-    return handleError(error, res);
-  }
-});
+// ── Portfolio triage with health scores ──────────────────────
 
 app.get('/api/portfolio-triage', (_req: Request, res: Response) => {
-  const sources = repo.listSources();
+  const sources = dedupeSourcesForPortfolio(repo.listSources());
   const rows = sources.map((source) => {
     const tasks = repo.getTasksBySource(source.id);
     const runs = repo.listRuns().filter((run) => run.sourceId === source.id);
     const reviews = runs
       .map((run) => repo.getReview(run.id))
       .filter((review): review is NonNullable<typeof review> => Boolean(review));
+    const analysis = repo.getAnalysisBySource(source.id);
+    const healthScore = analysis?.deepAnalysis?.healthScore?.overall ?? 50;
     const pendingTasks = tasks.filter((task) => !runs.some((run) => run.taskId === task.id));
     const failureRate = runs.length > 0 ? runs.filter((run) => run.status === 'failed').length / runs.length : 0;
     const avgDoneScore = reviews.length > 0
@@ -206,13 +172,13 @@ app.get('/api/portfolio-triage', (_req: Request, res: Response) => {
         pendingTasks.length * 0.5 +
         (1 - failureRate) * 2 +
         avgDoneScore * 2 +
-        (source.metadata?.intent ? 0.75 : 0)
+        (healthScore / 100) * 1.5
       ).toFixed(2),
     );
     return {
       sourceId: source.id,
       name: source.name,
-      intent: source.metadata?.intent ?? null,
+      healthScore,
       pendingTaskCount: pendingTasks.length,
       runCount: runs.length,
       failureRate: Number(failureRate.toFixed(2)),
@@ -223,80 +189,29 @@ app.get('/api/portfolio-triage', (_req: Request, res: Response) => {
 
   const sorted = rows.sort((a, b) => b.portfolioScore - a.portfolioScore);
   return res.json({
-    summary: 'Portfolio triage ranked by expected payoff and execution reliability.',
+    summary: 'Portfolio triage ranked by expected payoff, health, and execution reliability.',
     items: sorted,
   });
 });
+
+// ── Trust envelope ───────────────────────────────────────────
 
 app.get('/api/trust-envelope/:runId', (req: Request, res: Response) => {
   const runId = pickParam(req.params.runId);
   const run = runId ? repo.getRun(runId) : null;
   if (!run) return res.status(404).json({ error: `Run not found: ${runId ?? 'unknown'}` });
 
-  const task = repo.getTask(run.taskId);
-  const review = repo.getReview(run.id);
-  const artifacts = repo.getArtifactsByRun(run.id);
-  const envelope = {
-    runId: run.id,
-    status: run.status,
-    analysisConfidence: task?.confidence ?? null,
-    executionConfidence: review?.confidence ?? null,
-    evidenceCoverage: artifacts.length,
-    unresolvedRiskCount: countUnresolvedRiskSignals(task, run, review),
-    trustLevel: inferTrustLevel(task?.confidence, review?.confidence, run.status),
-  };
-  return res.json({ envelope });
+  return res.json({ envelope: buildTrustEnvelope(run) });
 });
 
-app.get('/api/recovery-playbook/:runId', (req: Request, res: Response) => {
-  const runId = pickParam(req.params.runId);
-  const run = runId ? repo.getRun(runId) : null;
-  if (!run) return res.status(404).json({ error: `Run not found: ${runId ?? 'unknown'}` });
-  const failure = classifyFailure(run.error, run.status);
-  return res.json({
-    runId: run.id,
-    failureCategory: failure.category,
-    confidence: failure.confidence,
-    playbook: failure.playbook,
-  });
-});
-
-app.get('/api/outcome-graph/:sourceId', (req: Request, res: Response) => {
-  const sourceId = pickParam(req.params.sourceId);
-  if (!sourceId) return res.status(400).json({ error: 'Source ID is required.' });
-  const source = repo.getSource(sourceId);
-  if (!source) return res.status(404).json({ error: `Source not found: ${sourceId}` });
-  const analysis = repo.getAnalysisBySource(sourceId);
-  const tasks = repo.getTasksBySource(sourceId);
-  const runs = repo.listRuns().filter((run) => run.sourceId === sourceId);
-  const reviews = runs
-    .map((run) => ({ runId: run.id, review: repo.getReview(run.id) }))
-    .filter((entry) => entry.review);
-  return res.json({
-    sourceId,
-    goal: source.metadata?.intent ?? analysis?.summary ?? source.name,
-    evidence: analysis?.insights ?? [],
-    actions: tasks.map((task) => ({
-      id: task.id,
-      title: task.title,
-      whyNow: task.whyNow ?? null,
-      confidence: task.confidence ?? null,
-    })),
-    outcomes: reviews.map((entry) => ({
-      runId: entry.runId,
-      doneScore: entry.review?.doneScore ?? null,
-      nextAction: entry.review?.nextAction ?? null,
-      confidence: entry.review?.confidence ?? null,
-    })),
-  });
-});
+// ── Proof of value with health delta ─────────────────────────
 
 app.get('/api/proof-of-value/:sourceId', (req: Request, res: Response) => {
   const sourceId = pickParam(req.params.sourceId);
   if (!sourceId) return res.status(400).json({ error: 'Source ID is required.' });
   const source = repo.getSource(sourceId);
   if (!source) return res.status(404).json({ error: `Source not found: ${sourceId}` });
-  const analysis = repo.getAnalysisBySource(sourceId);
+
   const runs = repo.listRuns().filter((run) => run.sourceId === sourceId);
   const reviews = runs
     .map((run) => repo.getReview(run.id))
@@ -311,6 +226,15 @@ app.get('/api/proof-of-value/:sourceId', (req: Request, res: Response) => {
     ? reviews.reduce((sum, review) => sum + review.confidence, 0) / reviews.length
     : 0;
 
+  const analyses = repo.listAnalysesBySource(sourceId);
+  const latestHealth = analyses[0]?.deepAnalysis?.healthScore?.overall ?? null;
+  const earliestHealth = analyses.length > 1
+    ? analyses[analyses.length - 1]?.deepAnalysis?.healthScore?.overall ?? null
+    : null;
+  const healthDelta = latestHealth !== null && earliestHealth !== null
+    ? Number((latestHealth - earliestHealth).toFixed(1))
+    : null;
+
   return res.json({
     sourceId,
     sourceName: source.name,
@@ -321,11 +245,13 @@ app.get('/api/proof-of-value/:sourceId', (req: Request, res: Response) => {
       completionRate: runs.length > 0 ? Number((completed / runs.length).toFixed(2)) : 0,
       averageDoneScore: Number(avgDoneScore.toFixed(2)),
       averageReviewConfidence: Number(avgReviewConfidence.toFixed(2)),
-      analysisRisk: analysis?.risk ?? null,
-      analysisComplexity: analysis?.complexity ?? null,
+      healthScoreCurrent: latestHealth,
+      healthScoreDelta: healthDelta,
     },
   });
 });
+
+// ── Reviews & run documents ──────────────────────────────────
 
 app.get('/api/review/:runId', (req: Request, res: Response) => {
   const runId = pickParam(req.params.runId);
@@ -366,6 +292,7 @@ app.get('/api/review-document/:runId', (req: Request, res: Response) => {
     analysis,
     task,
     tasks,
+    trustEnvelope: buildTrustEnvelope(run),
     usefulness: analysis ? summarizeUsefulness(analysis.classification, analysis.confidence) : null,
     documents: {
       runSummary: readTextFile(path.join(runDir, 'summary.md')),
@@ -379,6 +306,8 @@ app.get('/api/review-document/:runId', (req: Request, res: Response) => {
 
   return res.json(payload);
 });
+
+// ── Analysis & export ────────────────────────────────────────
 
 app.get('/api/analysis/:sourceId', (req: Request, res: Response) => {
   const sourceId = pickParam(req.params.sourceId);
@@ -474,12 +403,14 @@ app.get('/api/compare/:idA/:idB', (req: Request, res: Response) => {
 
     const sourceA = repo.getSource(analysisA.sourceId);
     const sourceB = repo.getSource(analysisB.sourceId);
+    const labelA = sourceA?.name ?? analysisA.sourceId;
+    const labelB = sourceB?.name ?? analysisB.sourceId;
 
     const comparison = compareAnalyses(
       analysisA,
       analysisB,
-      sourceA?.name ?? analysisA.sourceId,
-      sourceB?.name ?? analysisB.sourceId,
+      labelA,
+      labelB,
     );
 
     return res.json({ comparison });
@@ -488,18 +419,16 @@ app.get('/api/compare/:idA/:idB', (req: Request, res: Response) => {
   }
 });
 
+// ── Ingest & run ─────────────────────────────────────────────
+
 app.post('/api/ingest', (req: Request, res: Response) => {
   try {
     const sourceInput = typeof req.body?.source === 'string' ? req.body.source.trim() : '';
-    const intent = typeof req.body?.intent === 'string' ? req.body.intent.trim() : '';
     if (!sourceInput) {
       return res.status(400).json({ error: 'Request field "source" is required.' });
     }
 
     const source = ingestSource(sourceInput, config);
-    if (intent) {
-      source.metadata = { ...(source.metadata ?? {}), intent, intentUpdatedAt: new Date().toISOString() };
-    }
     repo.saveSource(source);
 
     const analysis = analyzeSource(source, config);
@@ -520,9 +449,6 @@ app.post('/api/run', async (req: Request, res: Response) => {
     const idempotencyKey = typeof req.body?.idempotencyKey === 'string'
       ? req.body.idempotencyKey.trim()
       : '';
-    const safetyProfile = req.body?.safetyProfile === 'conservative' || req.body?.safetyProfile === 'aggressive'
-      ? req.body.safetyProfile
-      : 'balanced';
     if (!taskId) {
       return res.status(400).json({ error: 'Request field "taskId" is required.' });
     }
@@ -562,20 +488,20 @@ app.post('/api/run', async (req: Request, res: Response) => {
       config,
       repo,
       idempotencyKey: idempotencyKey || undefined,
-      safetyProfile,
     });
     const review = generateReview({ run, task, analysis, repo });
 
-    return res.status(201).json({ run, review, reused: false, safetyProfile });
+    return res.status(201).json({ run, review, reused: false });
   } catch (error) {
     return handleError(error, res);
   }
 });
 
+// ── Server lifecycle ─────────────────────────────────────────
+
 export function startApiServer(options: ApiServerOptions = {}) {
   const port = options.port ?? defaultPort;
   const server = app.listen(port, () => {
-    // Keep this plain for easy discovery in terminal output.
     console.log(`RepoWright API running at http://localhost:${port}`);
   });
 
@@ -592,6 +518,8 @@ export function startApiServer(options: ApiServerOptions = {}) {
   return server;
 }
 
+// ── Helpers ──────────────────────────────────────────────────
+
 function handleError(error: unknown, res: Response): Response {
   if (error instanceof Error) {
     return res.status(500).json({ error: error.message });
@@ -603,6 +531,27 @@ function pickParam(value: string | string[] | undefined): string | undefined {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) return value[0];
   return undefined;
+}
+
+function dedupeSourcesForPortfolio(sources: Source[]): Source[] {
+  const byIdentity = new Map<string, Source>();
+  for (const source of sources) {
+    const key = getSourceIdentityKey(source);
+    const existing = byIdentity.get(key);
+    if (!existing || existing.createdAt < source.createdAt) {
+      byIdentity.set(key, source);
+    }
+  }
+  return [...byIdentity.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+function getSourceIdentityKey(source: Source): string {
+  if (source.fingerprint) return `fingerprint:${source.fingerprint}`;
+  if (source.location) {
+    const normalizedLocation = source.location.replace(/\\/g, '/').toLowerCase();
+    return `location:${source.type}:${normalizedLocation}`;
+  }
+  return `name:${source.type}:${source.name.toLowerCase()}`;
 }
 
 function readTextFile(filePath: string): string | null {
@@ -635,6 +584,17 @@ function summarizeUsefulness(classification: string, confidence: number): string
   }
 }
 
+interface TaskScoreBreakdown {
+  total: number;
+  taskConfidence: number;
+  historicalQuality: number;
+  historicalReliability: number;
+  explainability: number;
+  orderDecay: number;
+  difficultyFactor: number;
+  hotspotBoost: number;
+}
+
 function computeTaskPriorityScore(
   task: {
     order: number;
@@ -642,9 +602,11 @@ function computeTaskPriorityScore(
     confidence?: number;
     whyNow?: string;
     title: string;
+    executionContract?: { scope?: string } | null;
   },
   reviews: Array<{ confidence: number; doneScore?: number }>,
-): number {
+  hotspots?: Array<{ file: string; changeCount: number }>,
+): TaskScoreBreakdown {
   const historicalDone = reviews.length > 0
     ? reviews.reduce((sum, review) => sum + (review.doneScore ?? 0), 0) / reviews.length
     : 0.55;
@@ -652,115 +614,134 @@ function computeTaskPriorityScore(
     ? reviews.reduce((sum, review) => sum + review.confidence, 0) / reviews.length
     : 0.6;
   const taskConfidence = task.confidence ?? 0.55;
-  const difficultyWeight =
+  const difficultyFactor =
     task.difficulty === 'hard' || task.difficulty === 'complex'
       ? 0.8
       : task.difficulty === 'moderate'
         ? 0.9
         : 1;
-  const explainabilityBoost = task.whyNow ? 0.1 : 0;
+  const explainability = task.whyNow ? 0.1 : 0;
   const orderDecay = 1 / (task.order + 0.5);
-  return Number(
-    (
-      taskConfidence * 0.45 +
-      historicalDone * 0.25 +
-      historicalConfidence * 0.2 +
-      explainabilityBoost +
-      orderDecay * 0.1
-    ) * difficultyWeight,
-  );
-}
 
-function computeIntentFitScore(task: { title: string; rationale: string; whyNow?: string }, intent: string): number {
-  const haystack = `${task.title} ${task.rationale} ${task.whyNow ?? ''}`.toLowerCase();
-  const terms = intent
-    .toLowerCase()
-    .split(/\s+/)
-    .map((term) => term.trim())
-    .filter(Boolean);
-  if (terms.length === 0) return 0;
-  const hits = terms.reduce((sum, term) => sum + (haystack.includes(term) ? 1 : 0), 0);
-  return hits / terms.length;
-}
+  // Hotspot boost: if the task targets frequently-changed files, boost its priority
+  // CodeScene research shows fixing hotspots delivers 3-6x more value
+  let hotspotBoost = 0;
+  if (hotspots && hotspots.length > 0) {
+    const scope = task.executionContract?.scope ?? task.title;
+    const topHotspotFiles = new Set(hotspots.slice(0, 10).map((h) => h.file));
+    for (const file of topHotspotFiles) {
+      const basename = file.split('/').pop() ?? file;
+      if (scope.includes(basename) || scope.includes(file)) {
+        hotspotBoost = 0.15; // Significant boost for targeting hotspot files
+        break;
+      }
+    }
+  }
 
-function inferTrustLevel(
-  analysisConfidence: number | undefined | null,
-  executionConfidence: number | undefined | null,
-  status: string,
-): 'high' | 'moderate' | 'low' {
-  const merged = ((analysisConfidence ?? 0.5) + (executionConfidence ?? 0.5)) / 2;
-  if (status === 'failed') return 'low';
-  if (merged >= 0.75) return 'high';
-  if (merged >= 0.55) return 'moderate';
-  return 'low';
-}
+  const raw =
+    taskConfidence * 0.40 +
+    historicalDone * 0.20 +
+    historicalConfidence * 0.15 +
+    explainability +
+    orderDecay * 0.1 +
+    hotspotBoost;
 
-function countUnresolvedRiskSignals(
-  task: { riskNotes?: string } | null,
-  run: { status: string; error?: string },
-  review: { doneScore?: number; failed: string } | null,
-): number {
-  let count = 0;
-  if (task?.riskNotes) count += 1;
-  if (run.status === 'failed' || run.error) count += 2;
-  if (review?.doneScore !== undefined && review.doneScore < 0.5) count += 1;
-  if (review?.failed && review.failed.toLowerCase() !== 'none') count += 1;
-  return count;
-}
-
-function classifyFailure(
-  error: string | undefined,
-  status: string,
-): { category: string; confidence: number; playbook: string[] } {
-  if (status !== 'failed') {
-    return {
-      category: 'no-failure',
-      confidence: 1,
-      playbook: ['Run completed; continue with next prioritized task.'],
-    };
-  }
-  const msg = (error ?? '').toLowerCase();
-  if (msg.includes('not found') || msg.includes('enoent') || msg.includes('missing')) {
-    return {
-      category: 'environment',
-      confidence: 0.8,
-      playbook: [
-        'Validate workspace paths and required files.',
-        'Re-run with conservative safety profile.',
-        'Attach missing prerequisites to work order metadata.',
-      ],
-    };
-  }
-  if (msg.includes('timeout') || msg.includes('flaky')) {
-    return {
-      category: 'flaky-execution',
-      confidence: 0.72,
-      playbook: [
-        'Retry once with idempotency key.',
-        'Narrow task scope and isolate unstable checks.',
-        'Tag run for follow-up reliability analysis.',
-      ],
-    };
-  }
-  if (msg.includes('merge') || msg.includes('conflict')) {
-    return {
-      category: 'merge-conflict',
-      confidence: 0.78,
-      playbook: [
-        'Rebase or refresh source clone.',
-        'Re-run with conservative safety profile and narrower scope.',
-        'Split task into smaller execution contracts.',
-      ],
-    };
-  }
   return {
-    category: 'tooling-or-logic',
-    confidence: 0.6,
-    playbook: [
-      'Inspect command log artifact for failing stage.',
-      'Run with balanced profile and reduced scope.',
-      'Escalate if repeated failure occurs.',
-    ],
+    total: Number((raw * difficultyFactor).toFixed(3)),
+    taskConfidence: Number((taskConfidence * 0.40).toFixed(3)),
+    historicalQuality: Number((historicalDone * 0.20).toFixed(3)),
+    historicalReliability: Number((historicalConfidence * 0.15).toFixed(3)),
+    explainability: Number(explainability.toFixed(3)),
+    orderDecay: Number((orderDecay * 0.1).toFixed(3)),
+    difficultyFactor,
+    hotspotBoost: Number(hotspotBoost.toFixed(3)),
+  };
+}
+
+function buildTrustEnvelope(run: {
+  id: string;
+  taskId: string;
+  sourceId: string;
+  status: string;
+  error?: string;
+}) {
+  const task = repo.getTask(run.taskId);
+  const review = repo.getReview(run.id);
+  const artifacts = repo.getArtifactsByRun(run.id);
+  const analysis = repo.getAnalysisBySource(run.sourceId);
+
+  const analysisConfidence = task?.confidence ?? null;
+  const executionConfidence = review?.confidence ?? null;
+
+  // --- Multi-signal trust decomposition ---
+  // Each signal is 0-1 and represents confidence from a different perspective
+
+  // 1. Static analysis signal: how thorough was the analysis?
+  const staticAnalysisSignal = analysis?.confidence ?? 0.5;
+
+  // 2. Execution signal: did the run succeed and produce quality output?
+  const executionSignal = run.status === 'completed'
+    ? Math.min(1, (review?.doneScore ?? 0.3) * 0.7 + (artifacts.length > 0 ? 0.3 : 0))
+    : run.status === 'failed' ? 0.1 : 0.3;
+
+  // 3. Review signal: what does the post-run review say?
+  const reviewSignal = review
+    ? (review.confidence * 0.5 + (review.doneScore ?? 0) * 0.5)
+    : 0.4;
+
+  // 4. Evidence signal: how much supporting evidence exists?
+  const evidenceSignal = Math.min(1, artifacts.length * 0.25 +
+    (review?.findings?.length ?? 0) * 0.1);
+
+  let unresolvedRiskCount = 0;
+  const riskSignals: string[] = [];
+  if (task?.riskNotes) {
+    unresolvedRiskCount += 1;
+    riskSignals.push('Task has documented risks');
+  }
+  if (run.status === 'failed' || run.error) {
+    unresolvedRiskCount += 2;
+    riskSignals.push(run.error ? `Execution error: ${run.error.slice(0, 80)}` : 'Run failed');
+  }
+  if (review?.doneScore !== undefined && review.doneScore < 0.5) {
+    unresolvedRiskCount += 1;
+    riskSignals.push(`Low quality score (${Math.round(review.doneScore * 100)}%)`);
+  }
+  if (review?.failed && review.failed.toLowerCase() !== 'none' && review.failed.toLowerCase() !== 'no failures') {
+    unresolvedRiskCount += 1;
+    riskSignals.push('Review reported failures');
+  }
+
+  // Weighted trust computation
+  const merged = (
+    staticAnalysisSignal * 0.25 +
+    executionSignal * 0.35 +
+    reviewSignal * 0.25 +
+    evidenceSignal * 0.15
+  );
+
+  let trustLevel: 'high' | 'moderate' | 'low' = 'moderate';
+  if (run.status === 'failed') trustLevel = 'low';
+  else if (merged >= 0.7 && unresolvedRiskCount === 0) trustLevel = 'high';
+  else if (merged < 0.45 || unresolvedRiskCount >= 3) trustLevel = 'low';
+
+  return {
+    runId: run.id,
+    status: run.status,
+    analysisConfidence,
+    executionConfidence,
+    evidenceCoverage: artifacts.length,
+    unresolvedRiskCount,
+    trustLevel,
+    // Multi-signal breakdown (new)
+    signals: {
+      staticAnalysis: Number(staticAnalysisSignal.toFixed(2)),
+      execution: Number(executionSignal.toFixed(2)),
+      review: Number(reviewSignal.toFixed(2)),
+      evidence: Number(evidenceSignal.toFixed(2)),
+    },
+    riskSignals,
+    mergedScore: Number(merged.toFixed(3)),
   };
 }
 

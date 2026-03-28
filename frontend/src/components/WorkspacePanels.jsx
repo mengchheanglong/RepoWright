@@ -34,7 +34,7 @@ export function TasksSection({ tasks, onRunTask, busy, runningTaskId }) {
                 </div>
                 {typeof t.confidence === 'number' && (
                   <div>
-                    <span className="core-label">Task Confidence</span>
+                    <span className="core-label">Task Fit (heuristic)</span>
                     <p className="task-dod">{Math.round(t.confidence * 100)}%</p>
                   </div>
                 )}
@@ -120,38 +120,73 @@ export function ComparisonPanel({
   comparison,
   busy,
 }) {
-  if (!activeSourceId || sources.length < 2) return null;
+  if (!activeSourceId) return null;
+  const activeSource = sources.find((source) => source.id === activeSourceId) ?? null;
   const candidates = sources.filter((source) => source.id !== activeSourceId);
+  const canCompareSources = candidates.length > 0;
+  const comparisonCounts = comparison
+    ? comparison.deltas.reduce(
+        (acc, delta) => {
+          acc[delta.direction] += 1;
+          return acc;
+        },
+        { improved: 0, regressed: 0, unchanged: 0 },
+      )
+    : null;
   return (
     <section className="report-section">
       <SectionHeader number="CP" title="Comparison" />
-      <div className="toolbar-grid">
-        <label className="control-card">
-          <span className="core-label">Compare Against</span>
-          <select value={compareTargetId} onChange={(e) => onCompareTargetChange(e.target.value)}>
-            <option value="">Select a source</option>
-            {candidates.map((source) => (
-              <option key={source.id} value={source.id}>
-                {source.name || source.id}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="toolbar-actions">
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={onCompare}
-            disabled={busy || !compareTargetId}
-          >
-            {busy ? 'Working...' : 'Compare'}
-          </button>
+      <p className="section-note">
+        Compare the selected source against another analyzed source.
+      </p>
+      <div className="comparison-setup">
+        <div className="comparison-source-pill">
+          <span className="core-label">Current Source</span>
+          <strong>{activeSource?.name || activeSource?.id || activeSourceId}</strong>
+        </div>
+        <div className="toolbar-grid comparison-toolbar-grid">
+          <label className="control-card comparison-control-card">
+            <span className="core-label">Compare Against</span>
+            <select value={compareTargetId} onChange={(e) => onCompareTargetChange(e.target.value)}>
+              <option value="">Select a source</option>
+              {candidates.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {(source.name || source.id)} | added {formatDateTime(source.createdAt)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="toolbar-actions comparison-toolbar-actions">
+            <button
+              type="button"
+              className="secondary-action compare-action"
+              onClick={onCompare}
+              disabled={busy || !compareTargetId}
+            >
+              {busy ? 'Working...' : 'Compare Sources'}
+            </button>
+          </div>
         </div>
       </div>
 
+      {!canCompareSources && (
+        <p className="metric-note">
+          Analyze at least one more source to unlock comparison.
+        </p>
+      )}
+
       {comparison && (
         <div className="comparison-panel">
-          <p className="comparison-summary">{comparison.summary}</p>
+          {comparisonCounts && (
+            <div className="comparison-overview">
+              <p className="comparison-summary">{comparison.summary}</p>
+              <div className="comparison-counts">
+                <span className="delta-chip delta-chip-improved">{comparisonCounts.improved} improved</span>
+                <span className="delta-chip delta-chip-regressed">{comparisonCounts.regressed} regressed</span>
+                <span className="delta-chip delta-chip-unchanged">{comparisonCounts.unchanged} unchanged</span>
+              </div>
+            </div>
+          )}
           <div className="comparison-header-grid">
             <div className="comparison-source-card">
               <span className="core-label">Source A</span>
@@ -226,6 +261,32 @@ export function RunDocumentModal({ data, onClose }) {
                 <span className="core-label">Next Action</span>
                 <strong>{data.review.nextAction}</strong>
                 <small>{Math.round((data.review.confidence ?? 0) * 100)}% confidence</small>
+              </div>
+            )}
+            {data.trustEnvelope && (
+              <div className="detail-card">
+                <span className="core-label">Trust Level</span>
+                <strong style={{
+                  color: data.trustEnvelope.trustLevel === 'high' ? 'var(--green)' :
+                    data.trustEnvelope.trustLevel === 'low' ? 'var(--red)' : 'var(--yellow)'
+                }}>{data.trustEnvelope.trustLevel}</strong>
+                <small>
+                  Score {data.trustEnvelope.mergedScore != null ? (data.trustEnvelope.mergedScore * 100).toFixed(0) + '%' : 'n/a'}
+                  {' | '}{data.trustEnvelope.unresolvedRiskCount} risk signal{data.trustEnvelope.unresolvedRiskCount !== 1 ? 's' : ''}
+                </small>
+                {data.trustEnvelope.signals && (
+                  <small>
+                    Static {Math.round(data.trustEnvelope.signals.staticAnalysis * 100)}%
+                    {' | '}Exec {Math.round(data.trustEnvelope.signals.execution * 100)}%
+                    {' | '}Review {Math.round(data.trustEnvelope.signals.review * 100)}%
+                    {' | '}Evidence {Math.round(data.trustEnvelope.signals.evidence * 100)}%
+                  </small>
+                )}
+                {data.trustEnvelope.riskSignals?.length > 0 && (
+                  <small style={{ color: 'var(--red)' }}>
+                    {data.trustEnvelope.riskSignals.join(' | ')}
+                  </small>
+                )}
               </div>
             )}
           </div>

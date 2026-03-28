@@ -29,6 +29,13 @@ type SetComparison = {
   f1: number;
 };
 
+type CrosscheckSummary = {
+  classificationAccuracy: number;
+  macroPrecision: number;
+  macroRecall: number;
+  macroF1: number;
+};
+
 const root = path.resolve(process.cwd(), '..');
 const truthPath = process.argv[2] ?? path.join(root, 'evaluation', 'benchmark', 'truth', 'self-backend-truth.json');
 const outputPath = process.argv[3] ?? path.join(root, 'evaluation', 'results', 'self-backend-crosscheck.json');
@@ -98,7 +105,25 @@ const comparison = {
   },
 };
 
+const summary: CrosscheckSummary = (() => {
+  const capabilityComparisons = Object.values(comparison.capabilities);
+  const macroPrecision = capabilityComparisons.reduce((sum, item) => sum + item.precision, 0) / capabilityComparisons.length;
+  const macroRecall = capabilityComparisons.reduce((sum, item) => sum + item.recall, 0) / capabilityComparisons.length;
+  const macroF1 = capabilityComparisons.reduce((sum, item) => sum + item.f1, 0) / capabilityComparisons.length;
+  return {
+    classificationAccuracy: comparison.classification.correct ? 1 : 0,
+    macroPrecision: Number(macroPrecision.toFixed(3)),
+    macroRecall: Number(macroRecall.toFixed(3)),
+    macroF1: Number(macroF1.toFixed(3)),
+  };
+})();
+
+const output = {
+  ...comparison,
+  summary,
+};
+
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-fs.writeFileSync(outputPath, `${JSON.stringify(comparison, null, 2)}\n`);
+fs.writeFileSync(outputPath, `${JSON.stringify(output, null, 2)}\n`);
 
 console.log(`Wrote ${outputPath}`);

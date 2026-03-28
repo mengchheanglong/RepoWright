@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { CodeQuality, ConfigAnalysis, DependencyGraph, ImprovementItem } from '../../domain/index.js';
 import { CODE_EXTENSIONS } from './core.js';
-import { isActionableCodePath } from './scoping.js';
+import { classifyPathScope, isActionableCodePath } from './scoping.js';
 
 // --- Types ---
 
@@ -231,7 +231,7 @@ function scoreSecurity(
     details.push('HTTPS/TLS references found');
   }
 
-  return { name: 'Security', score: clamp(score, 0, 100), weight: 0.20, details };
+  return { name: 'Security Hygiene', score: clamp(score, 0, 100), weight: 0.20, details };
 }
 
 function scoreMaintainability(
@@ -323,7 +323,7 @@ function scoreTestCoverage(
   let score = 0;
   const details: string[] = [];
 
-  const testFiles = fileList.filter((f) => /\.test\.|\.spec\.|_test\.|_spec\.|test_|spec_|__tests__/i.test(f));
+  const testFiles = fileList.filter((f) => classifyPathScope(f) === 'test');
   if (testFiles.length > 0) {
     score += 40;
     details.push(`${testFiles.length} test file(s) found`);
@@ -336,7 +336,7 @@ function scoreTestCoverage(
     details.push('Test framework configured');
   }
 
-  const codeFiles = fileList.filter((f) => CODE_EXTENSIONS.has(path.extname(f)) && !(/\.test\.|\.spec\.|_test\.|_spec\.|test_|spec_|__tests__/i.test(f)));
+  const codeFiles = fileList.filter((f) => CODE_EXTENSIONS.has(path.extname(f)) && classifyPathScope(f) !== 'test');
   if (codeFiles.length > 0 && testFiles.length / codeFiles.length > 0.3) {
     score += 15;
     details.push(`Good test-to-code ratio (${(testFiles.length / codeFiles.length * 100).toFixed(0)}%)`);

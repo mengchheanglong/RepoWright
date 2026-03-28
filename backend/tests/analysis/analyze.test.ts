@@ -194,4 +194,208 @@ describe('analyzeSource', () => {
     expect(entryPoints.some((entry) => entry.includes('CLI entry'))).toBe(true);
     fs.rmSync(tmpDir, { recursive: true });
   });
+
+  it('does not infer patterns or security issues from detector definitions alone', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'op-analyze-detector-noise-'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'rules.ts'),
+      [
+        'export const checks = [',
+        '  {',
+        "    name: 'State Management',",
+        "    regex: /useReducer|createStore|createSlice|zustand|recoil|jotai/i,",
+        "    description: 'Looks for state management APIs',",
+        '  },',
+        '  {',
+        "    name: 'Actor Model',",
+        "    regex: /(?:Actor|spawn|send_message|Mailbox|GenServer)/i,",
+        "    description: 'Looks for actor runtime signals',",
+        '  },',
+        '  {',
+        "    name: 'CORS Wildcard Origin',",
+        "    regex: /allow_origins.*\\[\"?\\*\"?\\]|Access-Control-Allow-Origin/i,",
+        "    description: 'Example detector: allow_origins=[\"*\"]',",
+        '  },',
+        '  {',
+        "    name: 'Debug Mode Enabled',",
+        "    regex: /DEBUG\\s*[:=]\\s*(?:true|1)/i,",
+        "    description: 'Example detector: DEBUG = true',",
+        '  },',
+        '];',
+      ].join('\n'),
+    );
+
+    const source = makeSource({ type: 'directory', location: tmpDir, name: 'detector-noise' });
+    const report = analyzeSource(source, config);
+    const patterns = report.deepAnalysis?.coreSystem.patterns ?? [];
+    const securityTitles = new Set((report.deepAnalysis?.security?.findings ?? []).map((finding) => finding.title));
+
+    expect(patterns).not.toContain('State Management');
+    expect(patterns).not.toContain('Actor Model');
+    expect(securityTitles.has('CORS Wildcard Origin')).toBe(false);
+    expect(securityTitles.has('Debug Mode Enabled')).toBe(false);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('counts python-style test files consistently across improvements and health score', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'op-analyze-py-tests-'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'app.py'),
+      [
+        'def add(a, b):',
+        '    return a + b',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'test_app.py'),
+      [
+        'from app import add',
+        '',
+        'def test_add():',
+        '    assert add(1, 2) == 3',
+      ].join('\n'),
+    );
+
+    const source = makeSource({ type: 'directory', location: tmpDir, name: 'py-tests' });
+    const report = analyzeSource(source, config);
+    const testingIssues = (report.deepAnalysis?.improvements ?? [])
+      .filter((item) => item.area === 'Testing')
+      .map((item) => item.issue);
+    const testCoverage = report.deepAnalysis?.healthScore?.dimensions.find((dimension) => dimension.name === 'Test Coverage');
+
+    expect(testingIssues.some((issue) => issue.includes('0 test files'))).toBe(false);
+    expect(testCoverage?.details.some((detail) => detail.includes('1 test file(s) found'))).toBe(true);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('classifies debt-heavy repositories as improve-architecture and avoids optimistic debt grades', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'op-analyze-arch-debt-'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'arch-debt', dependencies: { express: '^5.0.0' } }),
+    );
+
+    for (let index = 0; index < 24; index += 1) {
+      fs.writeFileSync(
+        path.join(tmpDir, `feature-${index}.ts`),
+        `export const feature${index} = ${index};\n`,
+      );
+    }
+
+    fs.writeFileSync(path.join(tmpDir, 'a.ts'), 'import { b } from "./b";\nexport const a = () => b();\n');
+    fs.writeFileSync(path.join(tmpDir, 'b.ts'), 'import { a } from "./a";\nexport const b = () => a();\n');
+    fs.mkdirSync(path.join(tmpDir, 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'tests', 'architecture.test.ts'), 'export const smoke = true;\n');
+
+    const nestedLines = [
+      'export function risky(input: string) {',
+      '  if (input) {',
+      '    for (const outer of input.split(",")) {',
+      '      if (outer) {',
+      '        for (const inner of outer.split(":")) {',
+      '          if (inner) {',
+      '            try {',
+      '              JSON.parse(inner);',
+      '            } catch {',
+      '            }',
+      '          }',
+      '        }',
+      '      }',
+      '    }',
+      '  }',
+      '}',
+      '',
+    ];
+    for (let index = 0; index < 220; index += 1) {
+      nestedLines.push(`export function filler${index}() {`);
+      nestedLines.push('  try {');
+      nestedLines.push('    return "ok";');
+      nestedLines.push('  } catch {');
+      nestedLines.push('  }');
+      nestedLines.push('}');
+      nestedLines.push('');
+    }
+    fs.writeFileSync(path.join(tmpDir, 'debt-core.ts'), nestedLines.join('\n'));
+
+    const source = makeSource({ type: 'directory', location: tmpDir, name: 'arch-debt' });
+    const report = analyzeSource(source, config);
+
+    expect(report.classification).toBe('improve-architecture');
+    expect(report.deepAnalysis?.techDebt?.grade).not.toBe('A');
+    expect(report.deepAnalysis?.healthScore?.dimensions.some((dimension) => dimension.name === 'Security Hygiene')).toBe(true);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('does not flag sqlite database.exec as command injection', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'op-analyze-db-exec-'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'database.ts'),
+      [
+        'import Database from "better-sqlite3";',
+        'const db = new Database(":memory:");',
+        'db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY);");',
+      ].join('\n'),
+    );
+
+    const source = makeSource({ type: 'directory', location: tmpDir, name: 'db-exec' });
+    const report = analyzeSource(source, config);
+    const securityTitles = new Set((report.deepAnalysis?.security?.findings ?? []).map((finding) => finding.title));
+
+    expect(securityTitles.has('Command Injection')).toBe(false);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('detects wildcard CORS from JavaScript header configuration', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'op-analyze-js-cors-'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'server.ts'),
+      [
+        'import express from "express";',
+        'const app = express();',
+        'app.use((_req, res, next) => {',
+        '  res.setHeader("Access-Control-Allow-Origin", "*");',
+        '  next();',
+        '});',
+        'app.get("/health", (_req, res) => res.json({ ok: true }));',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'cors-server', dependencies: { express: '^5.0.0' } }),
+    );
+
+    const source = makeSource({ type: 'directory', location: tmpDir, name: 'cors-server' });
+    const report = analyzeSource(source, config);
+    const securityTitles = new Set((report.deepAnalysis?.security?.findings ?? []).map((finding) => finding.title));
+
+    expect(securityTitles.has('CORS Wildcard Origin')).toBe(true);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('analyzes the current backend without self-echo false positives', () => {
+    const source = makeSource({
+      type: 'directory',
+      location: process.cwd(),
+      name: 'RepoWright Backend',
+    });
+    const report = analyzeSource(source, config);
+    const patterns = report.deepAnalysis?.coreSystem.patterns ?? [];
+    const securityTitles = new Set((report.deepAnalysis?.security?.findings ?? []).map((finding) => finding.title));
+
+    expect(report.classification).toBe('improve-architecture');
+    expect(patterns).toContain('REST API');
+    expect(patterns).not.toContain('State Management');
+    expect(patterns).not.toContain('Actor Model');
+    expect(securityTitles.has('Missing Security Headers')).toBe(true);
+    expect(securityTitles.has('CORS Wildcard Origin')).toBe(true);
+    expect(securityTitles.has('Command Injection')).toBe(false);
+    expect(securityTitles.has('Dynamic eval()')).toBe(false);
+    expect(securityTitles.has('Insecure Cookie')).toBe(false);
+    expect(securityTitles.has('Debug Mode Enabled')).toBe(false);
+  });
 });

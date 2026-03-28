@@ -174,6 +174,126 @@ export function computeFileMetrics(filePath: string, content: string): FileMetri
   };
 }
 
+// ---------------------------------------------------------------------------
+// Cognitive Complexity (SonarSource-inspired)
+// ---------------------------------------------------------------------------
+// Increments for each break in linear flow (if, for, while, catch, switch,
+// ternary, logical chain). Nested control flow gets an additional nesting
+// penalty. This measures how hard code is to *understand*, not just testability.
+
+export function computeCognitiveComplexity(content: string, ext: string): number {
+  let complexity = 0;
+  let nesting = 0;
+
+  const lines = content.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Skip blanks, comments
+    if (trimmed.length === 0) continue;
+    if (/^\/\/|^#|^--|^\*|^\/\*/.test(trimmed)) continue;
+
+    // Nesting increments: opening braces (or indent-based for Python)
+    const controlFlowMatch = ext === '.py'
+      ? /^\s*(if|elif|else|for|while|try|except|with)\b/.test(trimmed)
+      : /\b(if|else\s+if|else|for|while|switch|catch|case)\b/.test(trimmed);
+
+    if (controlFlowMatch) {
+      // +1 for each control flow break, +nesting penalty
+      complexity += 1 + nesting;
+    }
+
+    // Logical operator sequences: each && or || in a condition adds +1
+    const logicalOps = (trimmed.match(/&&|\|\||and\s|or\s/g) ?? []).length;
+    complexity += logicalOps;
+
+    // Ternary operator adds +1 + nesting
+    const ternaries = (trimmed.match(/\?[^?:]*:/g) ?? []).length;
+    complexity += ternaries * (1 + nesting);
+
+    // Track nesting
+    if (ext === '.py') {
+      // Not perfect but approximates nesting via colon-ending control flow
+      if (/:\s*(#.*)?$/.test(trimmed) && controlFlowMatch) nesting++;
+      // Dedent detection for Python would need full indent tracking — approximate
+    } else {
+      for (const ch of trimmed) {
+        if (ch === '{') nesting++;
+        if (ch === '}') nesting = Math.max(0, nesting - 1);
+      }
+    }
+  }
+
+  return complexity;
+}
+
+// ---------------------------------------------------------------------------
+// Additional quality checks: argument count, boolean complexity, duplicates
+// ---------------------------------------------------------------------------
+
+export function computeMaxArgCount(content: string, ext: string): { count: number; file: string; func: string } {
+  let maxArgs = 0;
+  let maxFunc = '';
+
+  // Match function signatures and count parameters
+  const patterns = ext === '.py'
+    ? /def\s+(\w+)\s*\(([^)]*)\)/g
+    : ext === '.go'
+      ? /func\s+(?:\([^)]*\)\s+)?(\w+)\s*\(([^)]*)\)/g
+      : /(?:function\s+(\w+)|(\w+)\s*=\s*(?:async\s+)?(?:function)?\s*)\s*\(([^)]*)\)/g;
+
+  for (const match of content.matchAll(patterns)) {
+    const funcName = match[1] ?? match[2] ?? '';
+    const params = match[ext === '.py' ? 2 : ext === '.go' ? 2 : 3] ?? '';
+    if (params.trim().length === 0) continue;
+    // Count params by splitting on commas, excluding type annotations
+    const argCount = params.split(',').filter((p) => p.trim().length > 0).length;
+    if (argCount > maxArgs) {
+      maxArgs = argCount;
+      maxFunc = funcName;
+    }
+  }
+
+  return { count: maxArgs, file: '', func: maxFunc };
+}
+
+export function countBooleanComplexity(content: string): number {
+  // Count lines with 3+ boolean operators (complex conditions)
+  let count = 0;
+  for (const line of content.split('\n')) {
+    const ops = (line.match(/&&|\|\||\band\b|\bor\b/g) ?? []).length;
+    if (ops >= 3) count++;
+  }
+  return count;
+}
+
+export function detectDuplicateBlocks(fileContents: Map<string, string>): number {
+  // Hash-based duplicate detection: find blocks of 4+ consecutive non-blank
+  // lines that appear in multiple files or locations
+  const blockHashes = new Map<string, number>();
+  const blockSize = 4;
+
+  for (const [, content] of fileContents) {
+    const lines = content.split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !/^[/\*#]/.test(l) && !/^import\b|^export\b|^from\b|^require\b/.test(l));
+
+    for (let i = 0; i <= lines.length - blockSize; i++) {
+      const block = lines.slice(i, i + blockSize).join('\n');
+      if (block.length < 40) continue; // Skip trivially short blocks
+      blockHashes.set(block, (blockHashes.get(block) ?? 0) + 1);
+    }
+  }
+
+  // Count blocks that appear 2+ times
+  let duplicates = 0;
+  for (const count of blockHashes.values()) {
+    if (count >= 2) duplicates++;
+  }
+
+  return duplicates;
+}
+
 export function aggregateCodeQuality(metrics: FileMetrics[], fileContents: Map<string, string>): CodeQuality {
   let totalCode = 0;
   let totalComments = 0;
@@ -279,6 +399,36 @@ export function aggregateCodeQuality(metrics: FileMetrics[], fileContents: Map<s
   topFiles.sort((a, b) => b.lines - a.lines);
   largeFiles.sort((a, b) => b.lines - a.lines);
 
+  // Compute new quality metrics
+  let maxCognitiveComplexity = 0;
+  let maxCognitiveComplexityFile = '';
+  let totalCognitiveComplexity = 0;
+  let maxArgCount = 0;
+  let maxArgCountFile = '';
+  let totalBooleanComplexity = 0;
+
+  for (const [fp, content] of fileContents) {
+    if (!isActionableCodePath(fp)) continue;
+    const ext = path.extname(fp).toLowerCase();
+
+    const cc = computeCognitiveComplexity(content, ext);
+    totalCognitiveComplexity += cc;
+    if (cc > maxCognitiveComplexity) {
+      maxCognitiveComplexity = cc;
+      maxCognitiveComplexityFile = fp;
+    }
+
+    const argResult = computeMaxArgCount(content, ext);
+    if (argResult.count > maxArgCount) {
+      maxArgCount = argResult.count;
+      maxArgCountFile = `${fp} (${argResult.func}: ${argResult.count} params)`;
+    }
+
+    totalBooleanComplexity += countBooleanComplexity(content);
+  }
+
+  const duplicateBlockCount = detectDuplicateBlocks(fileContents);
+
   return {
     totalCodeLines: totalCode,
     totalCommentLines: totalComments,
@@ -298,5 +448,12 @@ export function aggregateCodeQuality(metrics: FileMetrics[], fileContents: Map<s
     todoCount,
     largeFiles: largeFiles.slice(0, 15),
     topFilesBySize: topFiles.slice(0, 10),
+    cognitiveComplexity: totalCognitiveComplexity,
+    maxCognitiveComplexity,
+    maxCognitiveComplexityFile,
+    maxArgCount,
+    maxArgCountFile,
+    booleanComplexityCount: totalBooleanComplexity,
+    duplicateBlockCount,
   };
 }

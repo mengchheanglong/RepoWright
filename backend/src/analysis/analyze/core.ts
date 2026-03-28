@@ -1,5 +1,11 @@
 import path from 'node:path';
-import type { WorkClassification } from '../../domain/index.js';
+import type {
+  CodeQuality,
+  DependencyGraph,
+  HealthScore,
+  ImprovementItem,
+  WorkClassification,
+} from '../../domain/index.js';
 
 export const LANGUAGE_MAP: Record<string, string> = {
   '.ts': 'TypeScript', '.tsx': 'TypeScript',
@@ -96,6 +102,14 @@ function hasThreshold(contents: Map<string, string>, tester: (c: string) => bool
   return hits >= minHits || (hits / contents.size) >= minRatio;
 }
 
+function countThresholdHits(contents: Map<string, string>, tester: (c: string) => boolean): number {
+  let hits = 0;
+  for (const c of contents.values()) {
+    if (tester(c)) hits++;
+  }
+  return hits;
+}
+
 function detectCliArchitecture(files: string[], contents: Map<string, string>): boolean {
   const hasCliPath = files.some((file) => /(?:^|[\\/])(cli|commands?|cmd|bin)(?:[\\/]|$)/i.test(file));
   const hasCliParser = hasThreshold(
@@ -135,6 +149,49 @@ function detectCliArchitecture(files: string[], contents: Map<string, string>): 
   return score >= 3 || ((hasCliParser || hasCliCommandRegistration) && hasCliEntryHandling);
 }
 
+function detectStateManagement(files: string[], contents: Map<string, string>): boolean {
+  const stateSignals = countThresholdHits(
+    contents,
+    (content) =>
+      /\buseReducer\s*\(|\bcreateStore\s*\(|\bcreateSlice\s*\(|\bconfigureStore\s*\(|\bzustand\b|\brecoil\b|\bjotai\b/i.test(
+        content,
+      ),
+  );
+  if (stateSignals === 0) return false;
+
+  const hasStateStructure = files.some((file) => /(?:^|[\\/])(store|stores|state|states|slices|reducers?)(?:[\\/]|[.-]|$)/i.test(file));
+  return stateSignals >= 2 || (stateSignals >= 1 && hasStateStructure);
+}
+
+function detectActorModel(files: string[], contents: Map<string, string>): boolean {
+  const runtimeHits = countThresholdHits(
+    contents,
+    (content) =>
+      /\bspawn\s*\(|\bGenServer\b|\bActorSystem\b|\bMailboxProcessor\b|\btell\s*\(|\bask\s*\(|\bcast\s*\(|\breceive\s*\{/i.test(
+        content,
+      ),
+  );
+  if (runtimeHits === 0) return false;
+
+  const hasActorStructure = files.some((file) => /(?:^|[\\/])(actors?|mailbox|supervisor)(?:[\\/]|[.-]|$)/i.test(file));
+  const hasStrongActorKeyword = hasThreshold(contents, (content) => /\bGenServer\b|\bActorSystem\b|\bMailboxProcessor\b/i.test(content), 1, 0.01);
+  return (runtimeHits >= 2 && hasActorStructure) || (runtimeHits >= 3 && hasStrongActorKeyword);
+}
+
+function detectRestApi(contents: Map<string, string>): boolean {
+  let routeHits = 0;
+  let decoratorHits = 0;
+  let frameworkHits = 0;
+
+  for (const content of contents.values()) {
+    routeHits += (content.match(/\b(?:app|router)\.(get|post|put|delete|patch)\s*\(/gi) ?? []).length;
+    decoratorHits += (content.match(/@app\.(get|post|put|delete|patch)\s*\(/gi) ?? []).length;
+    if (/APIRouter|FastAPI\(\)|express\(\)|express\.Router\(\)/i.test(content)) frameworkHits++;
+  }
+
+  return routeHits >= 2 || decoratorHits >= 2 || frameworkHits >= 2 || ((routeHits + decoratorHits) >= 1 && frameworkHits >= 1);
+}
+
 const PATTERN_INDICATORS: Record<string, (files: string[], contents: Map<string, string>) => boolean> = {
   'MVC Pattern': (files) =>
     files.filter((f) => f.includes('controller')).length >= 2 &&
@@ -154,16 +211,16 @@ const PATTERN_INDICATORS: Record<string, (files: string[], contents: Map<string,
     ),
   'Event-Driven': (_files, contents) => hasThreshold(contents, (c) => /\.on\(|\.emit\(|EventEmitter|addEventListener/i.test(c)),
   'CLI Architecture': (files, contents) => detectCliArchitecture(files, contents),
-  'REST API': (_files, contents) => hasThreshold(contents, (c) => /app\.(get|post|put|delete|patch)\s*\(/i.test(c) || /@app\.(get|post|put|delete|patch)\s*\(/i.test(c) || /APIRouter|FastAPI\(\)/i.test(c)),
+  'REST API': (_files, contents) => detectRestApi(contents),
   GraphQL: (_files, contents) => hasThreshold(contents, (c) => /typeDefs|resolvers|gql`|graphql/i.test(c)),
-  'State Management': (_files, contents) => hasThreshold(contents, (c) => /useReducer|createStore|createSlice|zustand|recoil|jotai/i.test(c), 1, 0.01),
+  'State Management': (files, contents) => detectStateManagement(files, contents),
   Monorepo: (files) => files.some((f) => f === 'pnpm-workspace.yaml' || f === 'lerna.json' || f === 'turbo.json'),
   'Plugin/Adapter Pattern': (_files, contents) => hasThreshold(contents, (c) => /interface\s+\w*Adapter|implements\s+\w*(Plugin|Adapter)/i.test(c)),
   'Domain-Driven Design': (files) => files.filter((f) => f.includes('domain')).length >= 3 && files.filter((f) => f.includes('entity') || f.includes('schemas')).length >= 3,
   CQRS: (files) => files.filter((f) => f.includes('command')).length >= 2 && files.filter((f) => f.includes('query')).length >= 2,
   'Pub/Sub': (_files, contents) => hasThreshold(contents, (c) => /publish|subscribe|channel|topic/i.test(c)),
   'Decorator Pattern': (_files, contents) => hasThreshold(contents, (c) => /@\w+\s*(?:\(|$)/m.test(c) && (c.includes('.py') || c.includes('class '))),
-  'Actor Model': (_files, contents) => hasThreshold(contents, (c) => /(?:Actor|spawn|send_message|Mailbox|GenServer)/i.test(c)),
+  'Actor Model': (files, contents) => detectActorModel(files, contents),
   'Builder Pattern': (_files, contents) => hasThreshold(contents, (c) => /\.build\(\)|Builder\b|\.with_\w+\(/i.test(c)),
   'Async/Concurrent': (_files, contents) => hasThreshold(contents, (c) => /tokio::spawn|goroutine|go\s+func|asyncio\.gather|Promise\.all|async\s+fn/i.test(c)),
 };
@@ -297,17 +354,90 @@ export function classifyText(text: string): WorkClassification {
   return 'learn';
 }
 
-export function classifyProject(
-  files: { path: string; extension: string }[],
-  languages: string[],
-  hasTests: boolean,
-): WorkClassification {
+export function classifyProject(params: {
+  fileCount: number;
+  actionableFileCount: number;
+  languages: string[];
+  hasTests: boolean;
+  frameworks: string[];
+  patterns: string[];
+  codeQuality: CodeQuality;
+  dependencyGraph: DependencyGraph;
+  improvements: ImprovementItem[];
+  healthScore?: HealthScore;
+  securityFindingCount?: number;
+}): WorkClassification {
+  const {
+    fileCount,
+    actionableFileCount,
+    languages,
+    hasTests,
+    frameworks,
+    patterns,
+    codeQuality,
+    dependencyGraph,
+    improvements,
+    healthScore,
+    securityFindingCount = 0,
+  } = params;
+
   if (languages.length === 0) return 'learn';
-  if (files.length > 150) return 'extract-skill';
-  if (files.length < 5) return 'prototype';
-  if (hasTests && files.length > 20) return 'improve-architecture';
-  if (files.length > 50) return 'extract-skill';
-  return 'learn';
+
+  const highPriorityCount = improvements.filter((item) => item.priority === 'high').length;
+  const mediumPriorityCount = improvements.filter((item) => item.priority === 'medium').length;
+  const healthOverall = healthScore?.overall ?? 60;
+
+  const architectureDebtScore =
+    (dependencyGraph.circularDeps.length > 0 ? 1.4 : 0) +
+    Math.min(codeQuality.largeFiles.length * 0.3, 1.8) +
+    (codeQuality.maxNestingDepth > 6 ? 0.9 : 0) +
+    (codeQuality.emptyCatchCount > 10 ? 0.9 : codeQuality.emptyCatchCount > 0 ? 0.3 : 0) +
+    (codeQuality.maxCognitiveComplexity && codeQuality.maxCognitiveComplexity > 30 ? 0.7 : 0) +
+    Math.min(highPriorityCount * 0.35, 1.75) +
+    Math.min(mediumPriorityCount * 0.12, 0.6) +
+    (healthOverall < 65 ? 0.9 : healthOverall < 75 ? 0.4 : 0) +
+    (securityFindingCount >= 8 ? 0.4 : securityFindingCount >= 3 ? 0.2 : 0);
+
+  const extractionValueScore =
+    Math.min(patterns.length * 0.5, 2) +
+    Math.min(frameworks.length * 0.25, 1.5) +
+    Math.min(languages.length * 0.35, 1.4) +
+    (hasTests ? 0.5 : 0) +
+    (healthOverall >= 72 ? 0.8 : healthOverall >= 60 ? 0.3 : 0) +
+    (architectureDebtScore < 2.5 ? 0.7 : 0);
+
+  const isPrototypeSized =
+    fileCount <= 8 &&
+    actionableFileCount <= 5 &&
+    codeQuality.totalFunctions <= 40 &&
+    patterns.length <= 1 &&
+    frameworks.length <= 1;
+  if (isPrototypeSized && !hasTests) return 'prototype';
+
+  if (
+    architectureDebtScore >= 3.2 &&
+    (hasTests || actionableFileCount >= 12 || fileCount >= 25)
+  ) {
+    return 'improve-architecture';
+  }
+
+  if (extractionValueScore >= 3.1 && architectureDebtScore < 2.8) {
+    return 'extract-skill';
+  }
+
+  if (hasTests && actionableFileCount >= 20 && healthOverall < 75) {
+    return 'improve-architecture';
+  }
+
+  if (actionableFileCount >= 35 && architectureDebtScore >= 2.4) {
+    return 'improve-architecture';
+  }
+
+  if (patterns.length >= 2 || frameworks.length >= 2 || languages.length >= 3) {
+    return 'extract-skill';
+  }
+
+  return fileCount <= 12 ? 'learn' : 'extract-skill';
 }
 
 export function extractTextInsights(text: string): string[] {

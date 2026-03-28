@@ -33,6 +33,8 @@ import { detectUniqueness } from './uniqueness.js';
 import { generateOptimizations } from './optimizations.js';
 import { scanSecurity } from './security.js';
 import { computeHealthScore } from './health-score.js';
+import { analyzeGitHistory } from './git-history.js';
+import { auditDependencies } from './dep-audit.js';
 import { fmtSize, readJsonSafe, readTextSafe } from './io.js';
 import { classifyPathScope, isActionableCodePath, summarizePathScopes } from './scoping.js';
 
@@ -238,19 +240,19 @@ function analyzeDirectory(source: Source, config: OperatorConfig): AnalysisRepor
   }
 
   const filePaths = files.map((f) => f.path);
-  const productionPaths = filePaths.filter((fp) => {
-    const scope = classifyPathScope(fp);
+  const classifiableFiles = files.filter((file) => {
+    const scope = classifyPathScope(file.path);
     return scope === 'production' || scope === 'test';
   });
+  const productionPaths = filePaths.filter((fp) => classifyPathScope(fp) === 'production');
   const productionFileContents = new Map<string, string>();
   for (const [fp, content] of fileContents) {
-    const scope = classifyPathScope(fp);
-    if (scope === 'production' || scope === 'test') {
+    if (classifyPathScope(fp) === 'production') {
       productionFileContents.set(fp, content);
     }
   }
   const scopeStats = summarizePathScopes(filePaths);
-  const hasTests = files.some((f) => f.path.includes('test') || f.path.includes('spec') || f.path.includes('__tests__'));
+  const hasTests = files.some((f) => classifyPathScope(f.path) === 'test');
   const hasSrc = files.some((f) => f.path.startsWith('src/') || f.path.startsWith('src\\'));
 
   // Detect languages from config files even if all source files are in vendor scope
@@ -281,8 +283,6 @@ function analyzeDirectory(source: Source, config: OperatorConfig): AnalysisRepor
     depGraph.circularDeps.length,
   );
 
-  const classification = classifyProject(files, languages, hasTests);
-
   const deepAnalysis = buildDeepAnalysis(
     source,
     productionPaths,
@@ -301,7 +301,21 @@ function analyzeDirectory(source: Source, config: OperatorConfig): AnalysisRepor
     codeQuality,
     depGraph,
     configAnalysis,
+    codeFiles.map((f) => f.path),
   );
+  const classification = classifyProject({
+    fileCount: classifiableFiles.length,
+    actionableFileCount: actionableCodeFiles.length,
+    languages,
+    hasTests,
+    frameworks,
+    patterns,
+    codeQuality,
+    dependencyGraph: depGraph,
+    improvements: deepAnalysis.improvements,
+    healthScore: deepAnalysis.healthScore,
+    securityFindingCount: deepAnalysis.security?.findings.length ?? 0,
+  });
 
   const analyzedCodeCoverage = codeFiles.length > 0 ? fileContents.size / codeFiles.length : 0;
   const analyzedActionableCodeCoverage = actionableCodeFiles.length > 0
@@ -345,6 +359,28 @@ function analyzeDirectory(source: Source, config: OperatorConfig): AnalysisRepor
   }
   insights.push(`Analysis coverage: ${(analyzedCodeCoverage * 100).toFixed(0)}% of code files, ${(analyzedActionableCodeCoverage * 100).toFixed(0)}% of production-scoped code files`);
   insights.push(`Reliability (dynamic): architecture ${reliability.architecture.toFixed(1)}/10, pattern/risk ${reliability.patternRisk.toFixed(1)}/10, security ${reliability.security.toFixed(1)}/10, decision ${reliability.decision.toFixed(1)}/10`);
+  if (deepAnalysis.gitHistory) {
+    const gh = deepAnalysis.gitHistory;
+    insights.push(`Git history: ${gh.totalCommits} commits, ${gh.activeContributors} contributor(s), bus factor ${gh.busFactor}`);
+    if (gh.hotspots.length > 0) {
+      insights.push(`Top hotspot: ${gh.hotspots[0]!.file} (${gh.hotspots[0]!.changeCount} changes)`);
+    }
+    if (gh.temporalCoupling.length > 0) {
+      insights.push(`Strongest coupling: ${gh.temporalCoupling[0]!.fileA} ↔ ${gh.temporalCoupling[0]!.fileB} (${(gh.temporalCoupling[0]!.couplingScore * 100).toFixed(0)}%)`);
+    }
+  }
+  if (deepAnalysis.techDebt) {
+    const td = deepAnalysis.techDebt;
+    const hours = Math.round(td.totalRemediationMinutes / 60);
+    const burdenText = td.structuralBurden != null
+      ? `, structural burden ${(td.structuralBurden * 100).toFixed(0)}%`
+      : '';
+    insights.push(`Tech debt: ~${hours}h remediation, ${(td.debtRatio * 100).toFixed(1)}% raw ratio${burdenText} (grade ${td.grade})`);
+  }
+  if (deepAnalysis.depAudit) {
+    const da = deepAnalysis.depAudit;
+    insights.push(`Dependency audit (${da.auditSource}): ${da.totalVulnerabilities} vulnerability(ies) (${da.criticalCount} critical, ${da.highCount} high)`);
+  }
 
   return {
     id: generateId('anl'),
@@ -386,8 +422,13 @@ function buildDeepAnalysis(
   codeQuality: CodeQuality,
   depGraph: DependencyGraph,
   configAnalysis: ConfigAnalysis,
+  codeFilePaths?: string[],
 ): DeepAnalysis {
-  const improvements = detectImprovements(filePaths, fileContents, hasTests, frameworks, patterns, fileCount, codeQuality, depGraph, configAnalysis);
+  // Run git history analysis and dep audit for directory/git-url sources
+  const gitHistory = analyzeGitHistory(source.location, codeFilePaths ?? filePaths);
+  const depAudit = auditDependencies(source.location);
+
+  const improvements = detectImprovements(filePaths, fileContents, hasTests, frameworks, patterns, fileCount, codeQuality, depGraph, configAnalysis, depAudit, allFilePaths);
   const security = scanSecurity(fileContents, filePaths, allFilePaths);
   const healthScore = computeHealthScore({
     fileList: filePaths,
@@ -399,6 +440,8 @@ function buildDeepAnalysis(
     improvements,
     languages: languageMap,
   });
+
+  const techDebt = computeTechDebtSummary(improvements, codeQuality, depGraph, fileCount);
 
   return {
     coreSystem: {
@@ -419,6 +462,9 @@ function buildDeepAnalysis(
     optimizations: generateOptimizations(languages, frameworks, patterns, filePaths, fileContents, fileCount, codeQuality, depGraph, improvements, healthScore),
     security,
     healthScore,
+    gitHistory: gitHistory ?? undefined,
+    techDebt,
+    depAudit: depAudit ?? undefined,
   };
 }
 
@@ -454,6 +500,60 @@ function buildCoreSummary(
     ? `${cq.totalCodeLines} production lines of code (${cq.totalAllScopeCodeLines} total)`
     : `${cq.totalCodeLines} lines of code`;
   return `A ${primaryLang}-based project${fwStr} containing ${fileCount} files (${fmtSize(totalSize)}), ${cq.totalFunctions} functions across ${locStr}. Comment coverage: ${(cq.commentRatio * 100).toFixed(1)}%. Source: "${source.name}".`;
+}
+
+function computeTechDebtSummary(
+  improvements: DeepAnalysis['improvements'],
+  codeQuality: CodeQuality,
+  dependencyGraph: DependencyGraph,
+  fileCount: number,
+) {
+  const totalRemediationMinutes = improvements.reduce((sum, item) => sum + (item.estimatedMinutes ?? 0), 0);
+  const baselineDevMinutes = Math.max(
+    codeQuality.totalCodeLines * 3,
+    fileCount * 30,
+    codeQuality.totalFunctions * 12,
+    60,
+  );
+  const rawDebtRatio = totalRemediationMinutes / baselineDevMinutes;
+
+  const highPriorityCount = improvements.filter((item) => item.priority === 'high').length;
+  const mediumPriorityCount = improvements.filter((item) => item.priority === 'medium').length;
+  const structuralBurden = Math.min(
+    1,
+    highPriorityCount * 0.07 +
+      mediumPriorityCount * 0.02 +
+      Math.min(dependencyGraph.circularDeps.length, 6) * 0.05 +
+      Math.min(codeQuality.largeFiles.length, 15) * 0.012 +
+      Math.max(0, codeQuality.maxNestingDepth - 6) * 0.025 +
+      Math.min(codeQuality.emptyCatchCount / 80, 0.12) +
+      Math.min(codeQuality.anyTypeCount / 20, 0.08) +
+      ((codeQuality.maxCognitiveComplexity ?? 0) > 30 ? 0.06 : 0) +
+      ((codeQuality.duplicateBlockCount ?? 0) > 250 ? 0.04 : 0),
+  );
+
+  const weightedDebtRatio = rawDebtRatio + structuralBurden * 0.18;
+  const grade = weightedDebtRatio <= 0.04 ? 'A' as const :
+    weightedDebtRatio <= 0.1 ? 'B' as const :
+      weightedDebtRatio <= 0.22 ? 'C' as const :
+        weightedDebtRatio <= 0.35 ? 'D' as const : 'F' as const;
+
+  const gradeRationale: string[] = [];
+  if (highPriorityCount > 0) gradeRationale.push(`${highPriorityCount} high-priority findings`);
+  if (dependencyGraph.circularDeps.length > 0) gradeRationale.push(`${dependencyGraph.circularDeps.length} circular dependency chain(s)`);
+  if (codeQuality.largeFiles.length > 0) gradeRationale.push(`${codeQuality.largeFiles.length} oversized file(s)`);
+  if (codeQuality.emptyCatchCount > 0) gradeRationale.push(`${codeQuality.emptyCatchCount} suppressed catch block(s)`);
+  if ((codeQuality.maxCognitiveComplexity ?? 0) > 30 && codeQuality.maxCognitiveComplexityFile) {
+    gradeRationale.push(`peak complexity in ${codeQuality.maxCognitiveComplexityFile}`);
+  }
+
+  return {
+    totalRemediationMinutes,
+    debtRatio: Number(rawDebtRatio.toFixed(3)),
+    grade,
+    structuralBurden: Number(structuralBurden.toFixed(3)),
+    gradeRationale,
+  };
 }
 
 function calculateAnalysisConfidence(

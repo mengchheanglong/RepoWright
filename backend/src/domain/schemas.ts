@@ -47,7 +47,8 @@ export const ImprovementItem = z.object({
   issue: z.string(),
   suggestion: z.string(),
   priority: z.enum(['high', 'medium', 'low']),
-  files: z.array(z.string()).optional(), // specific files affected
+  files: z.array(z.string()).optional(),
+  estimatedMinutes: z.number().optional(),
 });
 export type ImprovementItem = z.infer<typeof ImprovementItem>;
 
@@ -78,7 +79,7 @@ export const CodeQuality = z.object({
   commentRatio: z.number(), // 0-1
   totalFunctions: z.number(),
   avgFunctionLength: z.number(),
-  totalAllScopeCodeLines: z.number().optional(), // includes vendor/test/docs/generated
+  totalAllScopeCodeLines: z.number().optional(),
   totalAllScopeFunctions: z.number().optional(),
   maxFileLines: z.number(),
   maxFilePath: z.string(),
@@ -91,6 +92,13 @@ export const CodeQuality = z.object({
   todoCount: z.number(),
   largeFiles: z.array(z.object({ path: z.string(), lines: z.number() })),
   topFilesBySize: z.array(z.object({ path: z.string(), lines: z.number() })),
+  cognitiveComplexity: z.number().optional(),
+  maxCognitiveComplexity: z.number().optional(),
+  maxCognitiveComplexityFile: z.string().optional(),
+  maxArgCount: z.number().optional(),
+  maxArgCountFile: z.string().optional(),
+  booleanComplexityCount: z.number().optional(),
+  duplicateBlockCount: z.number().optional(),
 });
 export type CodeQuality = z.infer<typeof CodeQuality>;
 
@@ -192,6 +200,57 @@ export const HealthScore = z.object({
 });
 export type HealthScore = z.infer<typeof HealthScore>;
 
+export const FileHotspot = z.object({
+  file: z.string(),
+  changeCount: z.number(),
+  authorCount: z.number(),
+  lastChanged: z.string(),
+  coupledFiles: z.array(z.string()),
+});
+export type FileHotspot = z.infer<typeof FileHotspot>;
+
+export const GitHistory = z.object({
+  totalCommits: z.number(),
+  activeContributors: z.number(),
+  hotspots: z.array(FileHotspot),
+  temporalCoupling: z.array(z.object({
+    fileA: z.string(),
+    fileB: z.string(),
+    couplingScore: z.number(),
+  })),
+  busFactor: z.number(),
+  recentActivityWeeks: z.number(),
+});
+export type GitHistory = z.infer<typeof GitHistory>;
+
+export const TechDebtSummary = z.object({
+  totalRemediationMinutes: z.number(),
+  debtRatio: z.number(),
+  grade: z.enum(['A', 'B', 'C', 'D', 'F']),
+  structuralBurden: z.number().optional(),
+  gradeRationale: z.array(z.string()).optional(),
+});
+export type TechDebtSummary = z.infer<typeof TechDebtSummary>;
+
+export const DepVulnerability = z.object({
+  package: z.string(),
+  severity: z.enum(['critical', 'high', 'moderate', 'low', 'info']),
+  title: z.string(),
+  url: z.string().optional(),
+  fixAvailable: z.boolean(),
+});
+export type DepVulnerability = z.infer<typeof DepVulnerability>;
+
+export const DepAuditReport = z.object({
+  vulnerabilities: z.array(DepVulnerability),
+  totalVulnerabilities: z.number(),
+  criticalCount: z.number(),
+  highCount: z.number(),
+  moderateCount: z.number(),
+  auditSource: z.string(),
+});
+export type DepAuditReport = z.infer<typeof DepAuditReport>;
+
 export const DeepAnalysis = z.object({
   coreSystem: z.object({
     summary: z.string(),
@@ -219,6 +278,9 @@ export const DeepAnalysis = z.object({
   }),
   security: SecurityReport.optional(),
   healthScore: HealthScore.optional(),
+  gitHistory: GitHistory.optional(),
+  techDebt: TechDebtSummary.optional(),
+  depAudit: DepAuditReport.optional(),
 });
 export type DeepAnalysis = z.infer<typeof DeepAnalysis>;
 
@@ -336,8 +398,20 @@ export const AnalysisDelta = z.object({
 export type AnalysisDelta = z.infer<typeof AnalysisDelta>;
 
 export const AnalysisComparison = z.object({
-  sourceA: z.object({ id: z.string(), name: z.string(), analyzedAt: z.string() }),
-  sourceB: z.object({ id: z.string(), name: z.string(), analyzedAt: z.string() }),
+  sourceA: z.object({
+    id: z.string(),
+    name: z.string(),
+    analyzedAt: z.string(),
+    analysisId: z.string().optional(),
+    sourceId: z.string().optional(),
+  }),
+  sourceB: z.object({
+    id: z.string(),
+    name: z.string(),
+    analyzedAt: z.string(),
+    analysisId: z.string().optional(),
+    sourceId: z.string().optional(),
+  }),
   deltas: z.array(AnalysisDelta),
   summary: z.string(),
 });

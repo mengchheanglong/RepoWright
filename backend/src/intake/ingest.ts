@@ -63,7 +63,7 @@ function ingestGitUrl(url: string, config: OperatorConfig): Source {
   const cloneDir = path.join(clonesDir, `${repoName}_${Date.now()}`);
 
   logger.info(`Cloning ${url} into ${cloneDir}`);
-  const cloneArgs = ['clone', '--depth', '1', url, cloneDir];
+  const cloneArgs = ['clone', '--depth', '500', url, cloneDir];
   const cloneCommand = process.platform === 'win32'
     ? `git -c core.longpaths=true ${cloneArgs.join(' ')}`
     : `git ${cloneArgs.join(' ')}`;

@@ -6,12 +6,13 @@ function normalizeFilePath(fp: string): string {
 
 export function classifyPathScope(fp: string): PathScope {
   const p = normalizeFilePath(fp);
+  const base = p.split('/').pop() ?? '';
 
   if (/(^|\/)(docs?|examples?)\//.test(p) || /\.(md|rst|adoc)$/.test(p)) return 'docs';
   if (/(^|\/)node_modules\//.test(p) || /(^|\/)vendor\//.test(p) || /(^|\/)third_party\//.test(p) || /(^|\/)third-party\//.test(p) || /(^|\/)3rdparty\//.test(p) || /(^|\/)extern\//.test(p) || /(^|\/)external\//.test(p) || /(^|\/)deps\//.test(p)) return 'vendor';
   if (/(^|\/)dist\//.test(p) || /(^|\/)build\//.test(p) || /(^|\/)coverage\//.test(p) || /(^|\/)\.next\//.test(p) || /(^|\/)target\//.test(p)) return 'build';
   if (/(^|\/)(generated|gen|__generated__)\//.test(p) || /\.(min|bundle)\.(js|css)$/.test(p)) return 'generated';
-  if (/(^|\/)(test|tests|__tests__|spec|specs|fixtures?|mocks?|samples?)\//.test(p) || /(\.test\.|\.spec\.)/.test(p)) return 'test';
+  if (/(^|\/)(test|tests|__tests__|spec|specs|fixtures?|mocks?|samples?)\//.test(p) || /(\.test\.|\.spec\.|_test\.|_spec\.)/.test(p) || /^(test_|spec_)/.test(base)) return 'test';
 
   return 'production';
 }

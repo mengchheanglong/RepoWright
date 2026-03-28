@@ -1,4 +1,5 @@
 import { isActionableCodePath, isLikelyPlaceholderSecret } from './scoping.js';
+import { detectDynamicExecutionSignals } from './dangerous-execution.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -84,21 +85,6 @@ interface VulnPattern {
 }
 
 const VULN_PATTERNS: VulnPattern[] = [
-  // eval / exec with dynamic input
-  {
-    name: 'Dynamic eval()',
-    regex: /\beval\s*\(\s*(?:[^'"][^)]*|['"].*\$\{|['"].*\+)/,
-    severity: 'critical',
-    confidence: 'high',
-    description: 'eval() with dynamic input enables arbitrary code execution.',
-  },
-  {
-    name: 'Dynamic exec()',
-    regex: /\bexec\s*\(\s*(?:[^'"][^)]*|['"].*\$\{|['"].*\+)/,
-    severity: 'critical',
-    confidence: 'medium',
-    description: 'exec() with dynamic input enables arbitrary code execution.',
-  },
   // SQL string concatenation
   {
     name: 'SQL Injection',
@@ -106,21 +92,6 @@ const VULN_PATTERNS: VulnPattern[] = [
     severity: 'critical',
     confidence: 'medium',
     description: 'SQL query built with string concatenation or template literals is vulnerable to injection.',
-  },
-  // Command injection via child_process
-  {
-    name: 'Command Injection',
-    regex: /child_process.*\.exec\s*\(\s*(?:`[^`]*\$\{|['"].*\+)/,
-    severity: 'critical',
-    confidence: 'high',
-    description: 'child_process.exec with string interpolation may allow command injection.',
-  },
-  {
-    name: 'Command Injection (exec/spawn)',
-    regex: /(?:exec|spawn|system|popen)\s*\([^)]*(?:\+|\$\{|format\(|f['"])/,
-    severity: 'high',
-    confidence: 'medium',
-    description: 'Dynamic shell command execution may allow command injection.',
   },
   // Path traversal
   {
@@ -229,7 +200,11 @@ function isLikelyPatternDefinitionContext(content: string, matchIndex: number): 
   const start = Math.max(0, matchIndex - 100);
   const end = Math.min(content.length, matchIndex + 40);
   const window = content.slice(start, end);
-  return /(?:regex|pattern)\s*:\s*\/|new\s+RegExp\s*\(/i.test(window);
+  const lineStart = content.lastIndexOf('\n', matchIndex) + 1;
+  const lineEnd = content.indexOf('\n', matchIndex);
+  const line = content.slice(lineStart, lineEnd >= 0 ? lineEnd : content.length);
+  return /(?:regex|pattern|title|description)\s*:\s*(?:\/|['"])|new\s+RegExp\s*\(|=\s*\/.+\/[dgimsuy]*\.exec\s*\(|\.match(All)?\s*\(\s*\/|const\s+\w+\s*=\s*\/.+\/[dgimsuy]*/i.test(window) ||
+    /const\s+\w+\s*=\s*\/.+\/[dgimsuy]*/i.test(line);
 }
 
 /**
@@ -322,6 +297,19 @@ function scanVulnerabilities(files: Map<string, string>): SecurityFinding[] {
   for (const [fp, content] of files) {
     if (!isActionableCodePath(fp)) continue;
 
+    for (const signal of detectDynamicExecutionSignals(fp, content)) {
+      findings.push({
+        type: 'vulnerability',
+        severity: signal.severity,
+        title: signal.title,
+        description: signal.description,
+        filePath: fp,
+        line: signal.line,
+        pattern: signal.title,
+        confidence: signal.confidence,
+      });
+    }
+
     for (const pat of VULN_PATTERNS) {
       // Skip command injection checks in build scripts (setup.py, Makefile, etc.)
       if (pat.name.includes('Command Injection') && isBuildScript(fp)) continue;
@@ -357,30 +345,31 @@ function scanMisconfigurations(files: Map<string, string>, fileList: string[]): 
   // Check for HTTPS enforcement in production configs
   for (const [fp, content] of files) {
     if (!isActionableCodePath(fp)) continue;
-    if (/secure\s*:\s*false/i.test(content) && /cookie/i.test(content)) {
-      const match = /secure\s*:\s*false/i.exec(content);
+    const insecureCookieMatch = /secure\s*:\s*false/i.exec(content);
+    if (insecureCookieMatch && /cookie/i.test(content) && !isInsideDocstringOrComment(content, insecureCookieMatch.index, fp) && !isLikelyPatternDefinitionContext(content, insecureCookieMatch.index)) {
       findings.push({
         type: 'misconfiguration',
         severity: 'medium',
         title: 'Insecure Cookie',
         description: 'Cookie secure flag is set to false; cookies may be sent over unencrypted connections.',
         filePath: fp,
-        line: match ? getLineNumber(content, match.index) : 1,
+        line: getLineNumber(content, insecureCookieMatch.index),
         pattern: 'secure: false',
         confidence: 'medium',
       });
     }
 
-    // CORS wildcard detection for Python/FastAPI (Pydantic Field default with ["*"])
-    if (/cors_origins.*\["?\*"?\]|allow_origins.*\["?\*"?\]|CORSMiddleware.*allow_origins.*\*/i.test(content)) {
-      const corsMatch = /cors_origins.*\["?\*"?\]|allow_origins.*\["?\*"?\]/i.exec(content);
+    // CORS wildcard detection for JS/TS and Python/FastAPI.
+    const corsRegex = /setHeader\s*\(\s*['"]Access-Control-Allow-Origin['"]\s*,\s*['"]\*['"]\s*\)|Access-Control-Allow-Origin['"]?\s*,\s*['"]\*['"]|cors\s*\(\s*\{[\s\S]{0,160}?origin\s*:\s*['"]\*['"]|cors_origins.*\["?\*"?\]|allow_origins.*\["?\*"?\]|CORSMiddleware.*allow_origins.*\*/i;
+    const corsMatch = corsRegex.exec(content);
+    if (corsMatch && !isInsideDocstringOrComment(content, corsMatch.index, fp) && !isLikelyPatternDefinitionContext(content, corsMatch.index)) {
       findings.push({
         type: 'misconfiguration',
         severity: 'medium',
         title: 'CORS Wildcard Origin',
         description: 'CORS is configured to allow all origins (*). Restrict to specific trusted origins in production.',
         filePath: fp,
-        line: corsMatch ? getLineNumber(content, corsMatch.index) : 1,
+        line: getLineNumber(content, corsMatch.index),
         pattern: 'cors_origins: ["*"]',
         confidence: 'medium',
       });
@@ -401,15 +390,15 @@ function scanMisconfigurations(files: Map<string, string>, fileList: string[]): 
     }
 
     // Debug mode enabled
-    if (/DEBUG\s*[:=]\s*(?:true|1|['"](?:\*|true)['"])/i.test(content) && !fp.includes('.env.example')) {
-      const match = /DEBUG\s*[:=]\s*(?:true|1|['"](?:\*|true)['"])/i.exec(content);
+    const debugMatch = /DEBUG\s*[:=]\s*(?:true|1|['"](?:\*|true)['"])/i.exec(content);
+    if (debugMatch && !fp.includes('.env.example') && !isInsideDocstringOrComment(content, debugMatch.index, fp) && !isLikelyPatternDefinitionContext(content, debugMatch.index)) {
       findings.push({
         type: 'misconfiguration',
         severity: 'low',
         title: 'Debug Mode Enabled',
         description: 'Debug mode appears to be enabled in a production-scoped file.',
         filePath: fp,
-        line: match ? getLineNumber(content, match.index) : 1,
+        line: getLineNumber(content, debugMatch.index),
         pattern: 'DEBUG = true',
         confidence: 'low',
       });

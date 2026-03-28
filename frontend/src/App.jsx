@@ -8,11 +8,14 @@ import {
   ComponentsSection,
   ConfigAnalysisSection,
   CoreSystemSection,
+  DepAuditSection,
   DependencyGraphSection,
+  GitHistorySection,
   HealthScoreSection,
   ImprovementsSection,
   OptimizationsSection,
   SecuritySection,
+  TechDebtSection,
   UniquenessSection,
 } from './components/AnalysisReport.jsx';
 import {
@@ -33,19 +36,13 @@ export default function App() {
   const [compareTargetId, setCompareTargetId] = useState('');
   const [runDocument, setRunDocument] = useState(null);
   const [pendingDeleteSource, setPendingDeleteSource] = useState(null);
-  const [capabilities, setCapabilities] = useState(null);
   const [nextTaskHint, setNextTaskHint] = useState(null);
+  const [portfolioTriage, setPortfolioTriage] = useState([]);
+  const [proofOfValue, setProofOfValue] = useState(null);
   const [status, setStatus] = useState('Ready');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [runningTaskId, setRunningTaskId] = useState(null);
-  const [intentInput, setIntentInput] = useState('');
-  const [safetyProfile, setSafetyProfile] = useState('balanced');
-  const [portfolioTriage, setPortfolioTriage] = useState([]);
-  const [proofOfValue, setProofOfValue] = useState(null);
-  const [latestTrustEnvelope, setLatestTrustEnvelope] = useState(null);
-
-  // ── Data loading ─────────────────────────────────────────────
 
   async function refresh() {
     const [sourcesResponse, runsResponse] = await Promise.all([
@@ -56,17 +53,12 @@ export default function App() {
     setSources(nextSources);
     setRuns(runsResponse.runs ?? []);
 
-    if (activeSourceId && !nextSources.some((s) => s.id === activeSourceId)) {
+    if (activeSourceId && !nextSources.some((source) => source.id === activeSourceId)) {
       setActiveSourceId('');
       setAnalysis(null);
       setTasks([]);
       setComparison(null);
       setRunDocument(null);
-    }
-
-    if (!capabilities) {
-      const meta = await request('/capabilities').catch(() => null);
-      if (meta) setCapabilities(meta);
     }
 
     const triage = await request('/portfolio-triage').catch(() => ({ items: [] }));
@@ -83,31 +75,23 @@ export default function App() {
   useEffect(() => {
     if (!activeSourceId) return;
     if (compareTargetId && compareTargetId !== activeSourceId) return;
-    const fallback = sources.find((s) => s.id !== activeSourceId)?.id ?? '';
+    const fallback = sources.find((source) => source.id !== activeSourceId)?.id ?? '';
     if (fallback !== compareTargetId) setCompareTargetId(fallback);
   }, [activeSourceId, compareTargetId, sources]);
 
   useEffect(() => {
     if (!activeSourceId) {
       setNextTaskHint(null);
+      setProofOfValue(null);
       return;
     }
     request(`/next-task/${activeSourceId}`)
       .then((payload) => setNextTaskHint(payload))
       .catch(() => setNextTaskHint(null));
-  }, [activeSourceId, runs.length, tasks.length]);
-
-  useEffect(() => {
-    if (!activeSourceId) {
-      setProofOfValue(null);
-      return;
-    }
     request(`/proof-of-value/${activeSourceId}`)
       .then((payload) => setProofOfValue(payload))
       .catch(() => setProofOfValue(null));
-  }, [activeSourceId, runs.length]);
-
-  // ── Action handlers ──────────────────────────────────────────
+  }, [activeSourceId, runs.length, tasks.length]);
 
   async function onIngest(event) {
     event.preventDefault();
@@ -118,7 +102,7 @@ export default function App() {
     try {
       const payload = await request('/ingest', {
         method: 'POST',
-        body: JSON.stringify({ source: sourceInput.trim(), intent: intentInput.trim() || undefined }),
+        body: JSON.stringify({ source: sourceInput.trim() }),
       });
       const source = payload.source ?? null;
       const nextAnalysis = payload.analysis ?? null;
@@ -128,7 +112,6 @@ export default function App() {
       setAnalysis(nextAnalysis);
       setTasks(nextTasks);
       setSourceInput('');
-      setIntentInput('');
       setComparison(null);
       setStatus(`Analysis complete for "${source.name ?? source.id}".`);
       await refresh();
@@ -170,13 +153,11 @@ export default function App() {
       const idempotencyKey = `task:${task.id}:source:${task.sourceId}`;
       const payload = await request('/run', {
         method: 'POST',
-        body: JSON.stringify({ taskId: task.id, idempotencyKey, safetyProfile }),
+        body: JSON.stringify({ taskId: task.id, idempotencyKey }),
       });
       const nextRun = payload.run ?? null;
       if (!nextRun) throw new Error('Run response was incomplete.');
-      setStatus(payload.reused ? `Run ${nextRun.id} reused (idempotent replay).` : `Run ${nextRun.id} completed.`);
-      const trust = await request(`/trust-envelope/${nextRun.id}`).catch(() => null);
-      if (trust?.envelope) setLatestTrustEnvelope(trust.envelope);
+      setStatus(payload.reused ? `Run ${nextRun.id} reused (idempotent).` : `Run ${nextRun.id} completed.`);
       await refresh();
       await openRunDocument(nextRun.id);
     } catch (err) {
@@ -221,7 +202,7 @@ export default function App() {
     if (!activeSourceId || !compareTargetId) return;
     setBusy(true);
     setError('');
-    setStatus('Comparing analyses...');
+    setStatus('Comparing sources...');
     try {
       const payload = await request(`/compare/${activeSourceId}/${compareTargetId}`);
       setComparison(payload.comparison ?? null);
@@ -229,25 +210,6 @@ export default function App() {
     } catch (err) {
       setError(err.message);
       setStatus('Comparison failed.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function createWorkOrder() {
-    if (!activeSourceId || !intentInput.trim()) return;
-    setBusy(true);
-    setError('');
-    try {
-      const payload = await request('/work-order', {
-        method: 'POST',
-        body: JSON.stringify({ sourceId: activeSourceId, intent: intentInput.trim() }),
-      });
-      setTasks(payload.tasks ?? tasks);
-      setStatus(payload.summary ?? 'Work order created.');
-      await refresh();
-    } catch (err) {
-      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -280,20 +242,14 @@ export default function App() {
     }
   }
 
-  // ── Derived state ────────────────────────────────────────────
-
   const deep = analysis?.deepAnalysis;
-  const activeSource = sources.find((s) => s.id === activeSourceId) ?? null;
+  const activeSource = sources.find((source) => source.id === activeSourceId) ?? null;
   const sourceRuns = runs
-    .filter((r) => r.sourceId === activeSourceId)
+    .filter((run) => run.sourceId === activeSourceId)
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   const recommendedTask = nextTaskHint?.nextTask ?? null;
-
-  function applyPreset(preset) {
-    setSourceInput(preset);
-  }
-
-  // ── Layout ───────────────────────────────────────────────────
+  const breakdown = nextTaskHint?.scoreBreakdown ?? null;
+  const pov = proofOfValue?.metrics ?? null;
 
   return (
     <main className="shell">
@@ -304,14 +260,6 @@ export default function App() {
           Ingest a codebase, inspect its architecture, run generated tasks,
           compare sources, and export reports.
         </p>
-        <div className="hero-presets">
-          <span className="core-label">Quick input presets</span>
-          <div className="hero-preset-actions">
-            <button type="button" className="ghost" onClick={() => applyPreset('.')}>Current folder</button>
-            <button type="button" className="ghost" onClick={() => applyPreset('../')}>Parent folder</button>
-            <button type="button" className="ghost" onClick={() => applyPreset('https://github.com/owner/repo.git')}>Git URL</button>
-          </div>
-        </div>
         <form onSubmit={onIngest} className="ingest-form">
           <input
             type="text"
@@ -319,23 +267,7 @@ export default function App() {
             placeholder="Path to project, git URL, or text brief"
             onChange={(e) => setSourceInput(e.target.value)}
           />
-          <input
-            type="text"
-            value={intentInput}
-            placeholder="Optional intent (e.g., reduce CI flakiness)"
-            onChange={(e) => setIntentInput(e.target.value)}
-          />
-          <select value={safetyProfile} onChange={(e) => setSafetyProfile(e.target.value)}>
-            <option value="conservative">Conservative safety</option>
-            <option value="balanced">Balanced safety</option>
-            <option value="aggressive">Aggressive safety</option>
-          </select>
           <button type="submit" disabled={busy}>Analyze</button>
-          {activeSourceId && (
-            <button type="button" onClick={createWorkOrder} disabled={busy || !intentInput.trim()} className="ghost">
-              Create Work Order
-            </button>
-          )}
           <button type="button" onClick={refresh} disabled={busy} className="ghost">Refresh</button>
         </form>
         {activeSource && (
@@ -353,11 +285,6 @@ export default function App() {
         )}
         <p className="status">{status}</p>
         {error && <p className="error">{error}</p>}
-        {capabilities && (
-          <p className="meta">
-            API {capabilities.apiVersion} | Run schema {capabilities.runRequestSchemaVersion} | Idempotency {capabilities.runIdempotency?.supported ? 'enabled' : 'disabled'}
-          </p>
-        )}
       </section>
 
       <div className="main-layout">
@@ -396,40 +323,76 @@ export default function App() {
 
         <div className="report-area">
           {recommendedTask && (
-            <section className="report-section card">
+            <section className="report-section">
               <h3>Recommended Next Task</h3>
-              <p>{nextTaskHint?.summary}</p>
-              <button type="button" className="secondary-action" onClick={() => runTask(recommendedTask)} disabled={busy}>
-                Run Recommended Task
-              </button>
+              <p><strong>#{recommendedTask.order}:</strong> {recommendedTask.title}</p>
+              {breakdown && (
+                <p className="meta">
+                  Heuristic score {breakdown.total} - task fit {breakdown.taskConfidence}, review quality {breakdown.historicalQuality}, review reliability {breakdown.historicalReliability}, difficulty x{breakdown.difficultyFactor}
+                  {breakdown.hotspotBoost > 0 && <span style={{ color: 'var(--accent-2)' }}> +{breakdown.hotspotBoost} hotspot</span>}
+                </p>
+              )}
+              <div className="task-actions">
+                <button type="button" className="secondary-action" onClick={() => runTask(recommendedTask)} disabled={busy}>
+                  Run Recommended
+                </button>
+              </div>
             </section>
           )}
-          {latestTrustEnvelope && (
-            <section className="report-section card">
-              <h3>Run Trust Envelope</h3>
-              <p>Trust: <strong>{latestTrustEnvelope.trustLevel}</strong> | Risk signals: {latestTrustEnvelope.unresolvedRiskCount}</p>
-              <p>Analysis confidence: {latestTrustEnvelope.analysisConfidence ?? 'n/a'} | Execution confidence: {latestTrustEnvelope.executionConfidence ?? 'n/a'}</p>
-            </section>
-          )}
-          {proofOfValue?.metrics && (
-            <section className="report-section card">
+
+          {pov && pov.runCount > 0 && (
+            <section className="report-section">
               <h3>Proof of Value</h3>
-              <p>Runs: {proofOfValue.metrics.runCount} | Completion rate: {Math.round((proofOfValue.metrics.completionRate ?? 0) * 100)}%</p>
-              <p>Average done score: {proofOfValue.metrics.averageDoneScore} | Avg review confidence: {proofOfValue.metrics.averageReviewConfidence}</p>
+              <p className="section-note">Tracks the measurable impact of completed tasks on this source.</p>
+              <div className="run-meta-grid">
+                <div>
+                  <span className="core-label">Completion</span>
+                  <p>{Math.round((pov.completionRate ?? 0) * 100)}% ({pov.completedRuns}/{pov.runCount})</p>
+                  <small className="metric-note">Percentage of task runs that finished successfully</small>
+                </div>
+                <div>
+                  <span className="core-label">Avg Quality</span>
+                  <p>{Math.round((pov.averageDoneScore ?? 0) * 100)}%</p>
+                  <small className="metric-note">Average task completion quality from post-run reviews</small>
+                </div>
+                {pov.healthScoreCurrent != null && (
+                  <div>
+                    <span className="core-label">Health</span>
+                    <p>
+                      {pov.healthScoreCurrent}/100
+                      {pov.healthScoreDelta != null && (
+                        <span style={{ color: pov.healthScoreDelta >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: '0.4em' }}>
+                          {pov.healthScoreDelta >= 0 ? '+' : ''}{pov.healthScoreDelta}
+                        </span>
+                      )}
+                    </p>
+                    <small className="metric-note">
+                      Overall source health score{pov.healthScoreDelta != null ? '; delta shows change since the earliest saved analysis' : '.'}
+                    </small>
+                  </div>
+                )}
+              </div>
             </section>
           )}
-          {portfolioTriage.length > 0 && (
-            <section className="report-section card">
+
+          {portfolioTriage.length > 1 && (
+            <section className="report-section">
               <h3>Portfolio Triage</h3>
-              <ul>
+              <div className="runs-list">
                 {portfolioTriage.slice(0, 5).map((item) => (
-                  <li key={item.sourceId}>
-                    <strong>{item.name}</strong> — score {item.portfolioScore} ({item.pendingTaskCount} pending)
-                  </li>
+                  <div key={item.sourceId} className="run-card" style={{ cursor: 'pointer' }} onClick={() => loadAnalysis(item.sourceId)}>
+                    <div className="run-card-header">
+                      <div>
+                        <strong>{item.name}</strong>
+                        <p className="meta">Score {item.portfolioScore} | Health {item.healthScore}/100 | {item.pendingTaskCount} pending</p>
+                      </div>
+                    </div>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </section>
           )}
+
           {analysis && !deep && <BasicAnalysisSection analysis={analysis} />}
           {analysis && deep && (
             <>
@@ -444,6 +407,9 @@ export default function App() {
               <ConfigAnalysisSection configAnalysis={deep.configAnalysis} />
               <HealthScoreSection healthScore={deep.healthScore} />
               <SecuritySection security={deep.security} />
+              <GitHistorySection gitHistory={deep.gitHistory} />
+              <TechDebtSection techDebt={deep.techDebt} cq={deep.codeQuality} />
+              <DepAuditSection depAudit={deep.depAudit} />
             </>
           )}
 

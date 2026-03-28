@@ -163,7 +163,7 @@ function generateFindingsDrivenTasks(report: AnalysisReport): CandidateTask[] {
       : '';
 
     const difficulty = deriveDifficulty(bucket);
-    const confidence = deriveTaskConfidence(report, bucket, totalIssueCount);
+    const confidence = deriveTaskConfidence(report, bucket);
     const alternatives = buildAlternatives(bucket);
     const executionContract = buildExecutionContract(bucket, totalIssueCount, allFiles);
     const whyNow = buildWhyNow(bucket, totalIssueCount, confidence);
@@ -191,24 +191,31 @@ function generateFindingsDrivenTasks(report: AnalysisReport): CandidateTask[] {
 function deriveTaskConfidence(
   report: AnalysisReport,
   bucket: FindingsBucket,
-  totalIssueCount: number,
 ): number {
-  const base = report.confidence;
-  const issueWeight = Math.min(totalIssueCount * 0.03, 0.18);
+  const scopedItems = bucket.items.filter((item) => item.files.length > 0).length;
+  const fileBackedRatio = bucket.items.length > 0 ? scopedItems / bucket.items.length : 0;
+  const reportSignal = report.confidence * 0.5;
+  const evidenceSignal = Math.min(bucket.items.length * 0.06, 0.18);
+  const specificitySignal = fileBackedRatio * 0.16;
   const bucketBias =
-    bucket.label === 'Code Health' ? 0.08 : bucket.label === 'Documentation & Maintenance' ? 0.06 : 0.02;
-  return Number(Math.max(0.35, Math.min(0.98, base + issueWeight + bucketBias)).toFixed(2));
+    bucket.label === 'Code Health' ? 0.07 : bucket.label === 'Documentation & Maintenance' ? 0.05 : 0.02;
+  const architecturePenalty = bucket.label === 'Architecture' ? 0.05 : 0;
+
+  return Number(
+    Math.max(0.35, Math.min(0.82, reportSignal + evidenceSignal + specificitySignal + bucketBias - architecturePenalty)).toFixed(2),
+  );
 }
 
 function buildWhyNow(bucket: FindingsBucket, totalIssueCount: number, confidence: number): string {
-  const confidencePercent = Math.round(confidence * 100);
+  const evidenceLevel =
+    confidence >= 0.72 ? 'strong evidence' : confidence >= 0.58 ? 'moderate evidence' : 'limited evidence';
   if (bucket.label === 'Architecture') {
-    return `Prioritized now because architectural debt compounds quickly and ${totalIssueCount} structural finding(s) are blocking safer future changes (${confidencePercent}% confidence).`;
+    return `Prioritized now because architectural debt compounds quickly and ${totalIssueCount} structural finding(s) are blocking safer future changes (${evidenceLevel}).`;
   }
   if (bucket.label === 'Code Health') {
-    return `Prioritized now because ${totalIssueCount} code health issue(s) are directly increasing defect risk and slowing delivery (${confidencePercent}% confidence).`;
+    return `Prioritized now because ${totalIssueCount} code health issue(s) are directly increasing defect risk and slowing delivery (${evidenceLevel}).`;
   }
-  return `Prioritized now because maintenance/documentation gaps are fast to resolve and improve execution reliability (${confidencePercent}% confidence).`;
+  return `Prioritized now because maintenance/documentation gaps are fast to resolve and improve execution reliability (${evidenceLevel}).`;
 }
 
 function buildAlternatives(bucket: FindingsBucket): TaskAlternative[] {

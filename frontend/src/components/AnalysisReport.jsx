@@ -44,7 +44,7 @@ export function AnalysisStatsBar({ analysis, deep }) {
       )}
       {deep.security && (
         <div className="stat">
-          <span className="stat-label">Security</span>
+          <span className="stat-label">Security Findings</span>
           <span
             className="stat-value"
             style={{
@@ -57,6 +57,35 @@ export function AnalysisStatsBar({ analysis, deep }) {
             }}
           >
             {deep.security.score}/100
+          </span>
+        </div>
+      )}
+      {deep.techDebt && (
+        <div className="stat">
+          <span className="stat-label">Debt Signal</span>
+          <span
+            className="stat-value"
+            style={{
+              color:
+                deep.techDebt.grade === 'A' || deep.techDebt.grade === 'B'
+                  ? 'var(--green)'
+                  : deep.techDebt.grade === 'C'
+                    ? 'var(--yellow)'
+                    : 'var(--red)',
+            }}
+          >
+            {deep.techDebt.grade} ({Math.round(deep.techDebt.totalRemediationMinutes / 60)}h)
+          </span>
+        </div>
+      )}
+      {deep.gitHistory && (
+        <div className="stat">
+          <span className="stat-label">Bus Factor</span>
+          <span
+            className="stat-value"
+            style={{ color: deep.gitHistory.busFactor <= 1 ? 'var(--red)' : deep.gitHistory.busFactor <= 2 ? 'var(--yellow)' : 'var(--green)' }}
+          >
+            {deep.gitHistory.busFactor}
           </span>
         </div>
       )}
@@ -183,6 +212,9 @@ export function ImprovementsSection({ improvements }) {
               <div key={i} className="improvement-item">
                 <div className="imp-header">
                   <strong>{imp.area}</strong>
+                  {imp.estimatedMinutes != null && (
+                    <span className="imp-time">~{imp.estimatedMinutes >= 60 ? `${Math.round(imp.estimatedMinutes / 60)}h` : `${imp.estimatedMinutes}m`}</span>
+                  )}
                 </div>
                 <p className="imp-issue">{imp.issue}</p>
                 <p className="imp-suggestion">{imp.suggestion}</p>
@@ -283,6 +315,18 @@ export function CodeQualitySection({ cq }) {
           <span className="cq-num">{cq.todoCount}</span>
           <span className="cq-label">TODOs</span>
         </div>
+        {cq.cognitiveComplexity != null && (
+          <div className="cq-stat">
+            <span className="cq-num">{cq.cognitiveComplexity}</span>
+            <span className="cq-label">Cognitive Complexity</span>
+          </div>
+        )}
+        {cq.duplicateBlockCount != null && cq.duplicateBlockCount > 0 && (
+          <div className="cq-stat">
+            <span className="cq-num">{cq.duplicateBlockCount}</span>
+            <span className="cq-label">Duplicate Blocks</span>
+          </div>
+        )}
       </div>
 
       {(cq.anyTypeCount > 0 || cq.emptyCatchCount > 0) && (
@@ -568,11 +612,11 @@ export function SecuritySection({ security }) {
 
   return (
     <section className="report-section">
-      <SectionHeader number="10" title="Security" count={total} />
+      <SectionHeader number="10" title="Security Findings" count={total} />
       <div className="security-overview">
         <div className="security-score-ring" style={{ '--sec-color': scoreColor }}>
           <span className="security-score-num">{security.score}</span>
-          <span className="security-score-label">Score</span>
+          <span className="security-score-label">Findings Score</span>
         </div>
         <div className="security-summary-grid">
           {[
@@ -632,6 +676,170 @@ export function SecuritySection({ security }) {
       )}
 
       {total === 0 && <p className="sec-clean">No security findings detected.</p>}
+    </section>
+  );
+}
+
+// ── Git History (Behavioral Analysis) ───────────────────────────
+
+export function GitHistorySection({ gitHistory }) {
+  if (!gitHistory) return null;
+  return (
+    <section className="report-section">
+      <SectionHeader number="11" title="Git History" />
+      <p className="section-note">Behavioral signals from commit history — identifies hotspots, coupling, and knowledge distribution.</p>
+      <div className="cq-stats-grid">
+        <div className="cq-stat">
+          <span className="cq-num">{gitHistory.totalCommits}</span>
+          <span className="cq-label">Commits</span>
+        </div>
+        <div className="cq-stat">
+          <span className="cq-num">{gitHistory.activeContributors}</span>
+          <span className="cq-label">Contributors</span>
+        </div>
+        <div className="cq-stat">
+          <span className="cq-num" style={{ color: gitHistory.busFactor <= 1 ? 'var(--red)' : gitHistory.busFactor <= 2 ? 'var(--yellow)' : 'var(--green)' }}>
+            {gitHistory.busFactor}
+          </span>
+          <span className="cq-label">Bus Factor</span>
+        </div>
+        <div className="cq-stat">
+          <span className="cq-num">{gitHistory.recentActivityWeeks}/4</span>
+          <span className="cq-label">Activity Level</span>
+        </div>
+      </div>
+
+      {gitHistory.hotspots?.length > 0 && (
+        <div className="dep-section">
+          <span className="core-label">Hotspots (most frequently changed)</span>
+          <small className="metric-note">Files that change often are where improvements deliver the most value.</small>
+          <div className="file-bar-list">
+            {gitHistory.hotspots.slice(0, 10).map((h) => (
+              <div key={h.file} className="file-bar-item">
+                <code>{h.file}</code>
+                <span className="file-bar-count">
+                  {h.changeCount} changes, {h.authorCount} author{h.authorCount !== 1 ? 's' : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {gitHistory.temporalCoupling?.length > 0 && (
+        <div className="dep-section">
+          <span className="core-label">Temporal Coupling (files that always change together)</span>
+          <small className="metric-note">High coupling suggests these files should be in the same module or need decoupling.</small>
+          {gitHistory.temporalCoupling.slice(0, 8).map((c, i) => (
+            <div key={i} className="circular-chain">
+              <code>{c.fileA}</code>
+              <span className="chain-arrow">&harr;</span>
+              <code>{c.fileB}</code>
+              <span className="file-bar-count">{Math.round(c.couplingScore * 100)}%</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Tech Debt Summary ───────────────────────────────────────────
+
+export function TechDebtSection({ techDebt, cq }) {
+  if (!techDebt) return null;
+  const hours = Math.round(techDebt.totalRemediationMinutes / 60);
+  const gradeColor = { A: 'var(--green)', B: 'var(--green)', C: 'var(--yellow)', D: 'var(--red)', F: 'var(--red)' };
+  return (
+    <section className="report-section">
+      <SectionHeader number="12" title="Tech Debt" />
+      <p className="section-note">Estimated remediation effort blended with structural burden. Use this for triage, not budgeting.</p>
+      <div className="cq-stats-grid">
+        <div className="cq-stat">
+          <span className="cq-num" style={{ color: gradeColor[techDebt.grade] ?? 'var(--muted)' }}>{techDebt.grade}</span>
+          <span className="cq-label">Debt Grade</span>
+        </div>
+        <div className="cq-stat">
+          <span className="cq-num">{hours}h</span>
+          <span className="cq-label">Remediation</span>
+        </div>
+        <div className="cq-stat">
+          <span className="cq-num">{(techDebt.debtRatio * 100).toFixed(1)}%</span>
+          <span className="cq-label">Raw Debt Ratio</span>
+        </div>
+        {techDebt.structuralBurden != null && (
+          <div className="cq-stat">
+            <span className="cq-num">{Math.round(techDebt.structuralBurden * 100)}%</span>
+            <span className="cq-label">Structural Burden</span>
+          </div>
+        )}
+        {cq?.maxCognitiveComplexity != null && (
+          <div className="cq-stat">
+            <span className="cq-num" style={{ color: cq.maxCognitiveComplexity > 30 ? 'var(--red)' : cq.maxCognitiveComplexity > 15 ? 'var(--yellow)' : 'var(--green)' }}>
+              {cq.maxCognitiveComplexity}
+            </span>
+            <span className="cq-label">Peak Complexity</span>
+          </div>
+        )}
+      </div>
+      {techDebt.gradeRationale?.length > 0 && (
+        <div className="uniqueness-list">
+          <span className="core-label">Why this grade</span>
+          <ul>{techDebt.gradeRationale.map((reason, index) => <li key={index}>{reason}</li>)}</ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Dependency Audit ────────────────────────────────────────────
+
+export function DepAuditSection({ depAudit }) {
+  if (!depAudit) return null;
+  return (
+    <section className="report-section">
+      <SectionHeader number="13" title="Dependency Audit" count={depAudit.totalVulnerabilities} />
+      <p className="section-note">Known vulnerabilities in project dependencies via {depAudit.auditSource}.</p>
+      {depAudit.totalVulnerabilities === 0 ? (
+        <p className="sec-clean">No known vulnerabilities detected.</p>
+      ) : (
+        <>
+          <div className="cq-stats-grid">
+            <div className="cq-stat">
+              <span className="cq-num" style={{ color: depAudit.criticalCount > 0 ? 'var(--red)' : 'var(--muted)' }}>{depAudit.criticalCount}</span>
+              <span className="cq-label">Critical</span>
+            </div>
+            <div className="cq-stat">
+              <span className="cq-num" style={{ color: depAudit.highCount > 0 ? 'var(--red)' : 'var(--muted)' }}>{depAudit.highCount}</span>
+              <span className="cq-label">High</span>
+            </div>
+            <div className="cq-stat">
+              <span className="cq-num" style={{ color: depAudit.moderateCount > 0 ? 'var(--yellow)' : 'var(--muted)' }}>{depAudit.moderateCount}</span>
+              <span className="cq-label">Moderate</span>
+            </div>
+            <div className="cq-stat">
+              <span className="cq-num">{depAudit.totalVulnerabilities}</span>
+              <span className="cq-label">Total</span>
+            </div>
+          </div>
+          {depAudit.vulnerabilities?.length > 0 && (
+            <div className="dep-section">
+              {depAudit.vulnerabilities.slice(0, 10).map((v, i) => (
+                <div key={i} className="sec-finding-item">
+                  <div className="sec-finding-header">
+                    <strong>{v.package}</strong>
+                    <span className={`badge badge-${v.severity === 'critical' || v.severity === 'high' ? 'high' : v.severity === 'moderate' ? 'medium' : 'low'}`}>
+                      {v.severity}
+                    </span>
+                    {v.fixAvailable && <span className="badge badge-low">fix available</span>}
+                  </div>
+                  <p className="sec-finding-desc">{v.title}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }

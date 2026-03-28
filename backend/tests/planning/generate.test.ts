@@ -67,4 +67,72 @@ describe('generateTasks', () => {
       expect(tasks).toHaveLength(3);
     }
   });
+
+  it('keeps findings-driven task fit heuristic below certainty and explains evidence strength', () => {
+    const tasks = generateTasks(makeAnalysis({
+      deepAnalysis: {
+        coreSystem: {
+          summary: 'Test system',
+          architecture: 'REST API',
+          entryPoints: [],
+          dataFlow: 'request -> handler',
+          techStack: ['TypeScript'],
+          frameworks: ['Express'],
+          patterns: ['REST API'],
+        },
+        codeQuality: {
+          totalCodeLines: 400,
+          totalCommentLines: 40,
+          commentRatio: 0.1,
+          totalFunctions: 30,
+          avgFunctionLength: 20,
+          maxFileLines: 420,
+          maxFilePath: 'src/app.ts',
+          maxNestingDepth: 9,
+          maxNestingFile: 'src/app.ts',
+          anyTypeCount: 4,
+          anyTypeFiles: ['src/app.ts (4)'],
+          emptyCatchCount: 6,
+          emptyCatchFiles: ['src/app.ts (6)'],
+          todoCount: 1,
+          largeFiles: [{ path: 'src/app.ts', lines: 420 }],
+          topFilesBySize: [{ path: 'src/app.ts', lines: 420 }],
+        },
+        dependencyGraph: {
+          nodes: [],
+          centralModules: [],
+          circularDeps: [['src/a.ts', 'src/b.ts', 'src/a.ts']],
+          orphanFiles: [],
+          externalDepCount: 2,
+          internalImportCount: 12,
+        },
+        configAnalysis: {},
+        usefulComponents: [],
+        improvements: [
+          {
+            area: 'Error Handling',
+            issue: '6 empty catch block(s)',
+            suggestion: 'Log or rethrow errors',
+            priority: 'high',
+            files: ['src/app.ts'],
+            estimatedMinutes: 20,
+          },
+          {
+            area: 'Code Complexity',
+            issue: 'Maximum nesting depth of 9',
+            suggestion: 'Extract helper functions',
+            priority: 'high',
+            files: ['src/app.ts'],
+            estimatedMinutes: 30,
+          },
+        ],
+        uniqueness: { summary: 'n/a', differentiators: [], novelApproaches: [] },
+        optimizations: { simplification: [], alternativeStack: [], performance: [] },
+      },
+    }));
+
+    expect(tasks[0]?.confidence).toBeLessThanOrEqual(0.82);
+    expect(tasks[0]?.whyNow).toContain('evidence');
+    expect(tasks[0]?.whyNow).not.toContain('% confidence');
+  });
 });

@@ -29,7 +29,7 @@ export function compareAnalyses(
   const cqB = b.deepAnalysis?.codeQuality;
   if (cqA && cqB) {
     addNumericDelta(deltas, 'Code Lines', cqA.totalCodeLines, cqB.totalCodeLines, 'neutral');
-    addNumericDelta(deltas, 'Functions', cqA.totalFunctions, cqB.totalFunctions, 'higher');
+    addNumericDelta(deltas, 'Functions', cqA.totalFunctions, cqB.totalFunctions, 'neutral');
     addNumericDelta(deltas, 'Comment Ratio', cqA.commentRatio, cqB.commentRatio, 'higher');
     addNumericDelta(deltas, 'Any Type Count', cqA.anyTypeCount, cqB.anyTypeCount, 'lower');
     addNumericDelta(deltas, 'Empty Catches', cqA.emptyCatchCount, cqB.emptyCatchCount, 'lower');
@@ -37,6 +37,26 @@ export function compareAnalyses(
     addNumericDelta(deltas, 'Max Nesting', cqA.maxNestingDepth, cqB.maxNestingDepth, 'lower');
     addNumericDelta(deltas, 'Avg Function Length', cqA.avgFunctionLength, cqB.avgFunctionLength, 'lower');
     addNumericDelta(deltas, 'Large Files', cqA.largeFiles.length, cqB.largeFiles.length, 'lower');
+  }
+
+  const healthA = a.deepAnalysis?.healthScore;
+  const healthB = b.deepAnalysis?.healthScore;
+  if (healthA && healthB) {
+    addNumericDelta(deltas, 'Health Score', healthA.overall, healthB.overall, 'higher');
+  }
+
+  const securityA = a.deepAnalysis?.security;
+  const securityB = b.deepAnalysis?.security;
+  if (securityA && securityB) {
+    addNumericDelta(deltas, 'Security Findings Score', securityA.score, securityB.score, 'higher');
+    addNumericDelta(deltas, 'Security Findings', securityA.findings.length, securityB.findings.length, 'lower');
+  }
+
+  const debtA = a.deepAnalysis?.techDebt;
+  const debtB = b.deepAnalysis?.techDebt;
+  if (debtA && debtB) {
+    addNumericDelta(deltas, 'Debt Remediation Minutes', debtA.totalRemediationMinutes, debtB.totalRemediationMinutes, 'lower');
+    addNumericDelta(deltas, 'Debt Ratio', debtA.debtRatio, debtB.debtRatio, 'lower');
   }
 
   // --- Dependency graph deltas ---
@@ -68,14 +88,18 @@ export function compareAnalyses(
 
   return {
     sourceA: {
-      id: a.sourceId,
+      id: a.id,
       name: sourceAName ?? a.sourceId,
       analyzedAt: a.createdAt,
+      analysisId: a.id,
+      sourceId: a.sourceId,
     },
     sourceB: {
-      id: b.sourceId,
+      id: b.id,
       name: sourceBName ?? b.sourceId,
       analyzedAt: b.createdAt,
+      analysisId: b.id,
+      sourceId: b.sourceId,
     },
     deltas,
     summary: `${improved} improved, ${regressed} regressed, ${unchanged} unchanged`,

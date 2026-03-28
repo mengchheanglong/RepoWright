@@ -32,14 +32,3 @@ export function backendDisplayName(type: BackendType): string {
   }
 }
 
-export function listBackendCapabilities(): Array<{
-  type: BackendType;
-  name: string;
-  available: boolean;
-}> {
-  return Object.entries(backendRegistry).map(([type, backend]) => ({
-    type: type as BackendType,
-    name: backend.name,
-    available: backend.isAvailable(),
-  }));
-}
